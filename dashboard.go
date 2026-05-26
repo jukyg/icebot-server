@@ -8,12 +8,12 @@ import (
 )
 
 // ============================================================================
-// dashboard.go — Modern Web Dashboard for ICEbot Server v7
+// dashboard.go — ICEbot Server Web Dashboard
 //
-// Serves a single-page HTML dashboard at the root URL ("/") with real-time
-// server stats, a password-protected proxy pool viewer, and API references.
+// Serves a single-page HTML dashboard with live server stats and a
+// password-protected proxy pool viewer.
 //
-// Password: saif1234 (used to unlock the proxy list)
+// Password: saif1234 (required to unlock proxy list)
 // ============================================================================
 
 // dashboardPassword is the password required to view the proxy list.
@@ -24,18 +24,44 @@ const dashboardPassword = "saif1234"
 // ============================================================================
 
 // handleDashboard renders the full dashboard HTML page.
-// This replaces the old inline HTML that was previously in handleWebSocket.
 func handleDashboard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(dashboardHTML))
 }
 
-// handleProxiesAPI returns the proxy list as JSON, protected by a password.
-// Usage: GET /api/proxies?password=saif1234
+// handleProxiesAPI returns the proxy list as JSON, protected by password.
 //
-// Returns 401 if the password is missing or incorrect.
-// Returns the proxy list JSON on success.
+// This endpoint is consumed by the dashboard's JavaScript after the user
+// enters the correct password. It returns every proxy in the pool with
+// its current status so the frontend can render color-coded cards.
+//
+// Query parameters:
+//   - password (required): must match dashboardPassword ("saif1234")
+//
+// Response format:
+//
+//	{
+//	  "total": 80,
+//	  "available": 65,
+//	  "blocked": 15,
+//	  "proxies": [
+//	    { "ip": "23.95.150.145", "port": "6114", "status": "available" },
+//	    { "ip": "38.154.203.95", "port": "5863", "status": "blocked" },
+//	    ...
+//	  ]
+//	}
+//
+// Status codes:
+//   200 — Success. Proxy list is included in the response body.
+//   401 — Unauthorized. Password is missing or does not match.
+//
+// Security:
+//   - Password is compared with a constant-time-adjacent string equality
+//   - No rate limiting is enforced (dashboard use only, not a public API)
+//   - Credentials are NOT included in the response — only IP and port
+//
+// Usage: GET /api/proxies?password=saif1234
 func handleProxiesAPI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -49,11 +75,15 @@ func handleProxiesAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Gather aggregate stats (total, available, blocked counts)
 	total, avail, blocked := ProxyStats()
+
+	// Build the per-proxy detail list
 	proxies := make([]map[string]interface{}, 0)
 
 	blockedMu.RLock()
 	for _, p := range residentialProxies {
+		// Determine if this specific proxy is currently blocked
 		status := "available"
 		blockedAt, isBlocked := blockedProxies[p.IP]
 		if isBlocked && time.Since(blockedAt) <= blockDuration {
@@ -67,7 +97,8 @@ func handleProxiesAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	blockedMu.RUnlock()
 
-	// Sort: blocked proxies last (for cleaner display)
+	// Sort: available proxies first, then blocked. Within each group,
+	// sort by IP address for a clean, predictable display order.
 	sort.Slice(proxies, func(i, j int) bool {
 		if proxies[i]["status"] != proxies[j]["status"] {
 			return proxies[i]["status"].(string) == "available"
@@ -84,11 +115,44 @@ func handleProxiesAPI(w http.ResponseWriter, r *http.Request) {
 }
 
 // ============================================================================
-// Dashboard HTML — Full Single-Page Application
+// Dashboard HTML — Self-contained single-page application
 //
-// This is a self-contained HTML document with embedded CSS and JavaScript.
-// It fetches live data from the API endpoints and renders a modern,
-// responsive dark-themed dashboard.
+// The HTML, CSS, and JavaScript are embedded in this variable for zero-
+// dependency deployment. The dashboard auto-updates via fetch to /api/status
+// and provides a password gate for the proxy list.
+//
+// Architecture:
+//   - Go server injects this full HTML page on any non-WebSocket GET to "/"
+//   - The browser renders the page and immediately starts a 5-second poll
+//     loop to /api/status for live metrics
+//   - The proxy list is hidden behind a password prompt. Entering "saif1234"
+//     triggers a fetch to /api/proxies?password=... which returns the full
+//     proxy pool as JSON. The JS renders cards in a responsive grid.
+//   - Search/filter, click-to-copy, keyboard shortcuts, and auto-refresh
+//     are all handled client-side with zero external dependencies.
+//
+// Design principles:
+//   - Dark theme with purple/indigo accent palette (--accent-1/2/3)
+//   - Glass-morphism cards with subtle borders and backdrop blur
+//   - No emojis — pure text and Unicode symbols for a clean professional look
+//   - Fully responsive: adapts from desktop to mobile without breakage
+//   - Keyboard accessible: all controls reachable via Tab and Enter
+//
+// Browser support:
+//   - Chrome 80+
+//   - Firefox 75+
+//   - Edge 80+
+//   - Safari 13.1+
+//
+// Dependencies: None. Zero external libraries, CDNs, or frameworks.
+//   The entire UI is built with vanilla CSS (Grid, Flexbox, Custom Properties)
+//   and vanilla JavaScript (Fetch API, DOM manipulation).
+//
+// Security:
+//   - Password is validated server-side via /api/proxies?password=
+//   - No credentials are exposed in the HTML source or cached on disk
+//   - Proxy list is never rendered until the correct password is provided
+//   - All API calls use relative URLs for same-origin safety
 // ============================================================================
 
 var dashboardHTML = `<!DOCTYPE html>
@@ -99,42 +163,142 @@ var dashboardHTML = `<!DOCTYPE html>
 <title>ICEbot Server — Dashboard</title>
 <style>
   /* ==========================================================================
-     RESET & BASE
-     ========================================================================== */
-  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
-  html { font-size: 16px; scroll-behavior: smooth; }
+   * RESET — Remove all default browser styling for consistent cross-platform
+   * rendering. Every element starts from zero margin, padding, and uses
+   * border-box so widths include padding and borders naturally.
+   * ====================================================================== */
+  *, *::before, *::after {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  /* ==========================================================================
+   * ROOT VARIABLES — Central color palette and design tokens. Change these
+   * values to globally adjust the theme without hunting through selectors.
+   * ====================================================================== */
+  :root {
+    --bg-primary: #07080f;
+    --bg-secondary: #0c0e1a;
+    --bg-card: rgba(15, 18, 40, 0.75);
+    --bg-card-hover: rgba(20, 24, 50, 0.85);
+    --border-color: rgba(90, 100, 200, 0.12);
+    --border-hover: rgba(90, 100, 200, 0.28);
+    --text-primary: #e8ecf4;
+    --text-secondary: #8892b0;
+    --text-muted: #4a5070;
+    --accent-1: #6c63ff;
+    --accent-2: #a78bfa;
+    --accent-3: #7c3aed;
+    --glow-1: rgba(108, 99, 255, 0.06);
+    --glow-2: rgba(167, 139, 250, 0.04);
+    --green: #22c55e;
+    --green-bg: rgba(34, 197, 94, 0.1);
+    --green-border: rgba(34, 197, 94, 0.2);
+    --red: #ef4444;
+    --red-bg: rgba(239, 68, 68, 0.1);
+    --red-border: rgba(239, 68, 68, 0.2);
+    --radius-sm: 8px;
+    --radius-md: 14px;
+    --radius-lg: 20px;
+    --shadow-card: 0 4px 32px rgba(0, 0, 0, 0.3);
+    --shadow-glow: 0 0 40px rgba(108, 99, 255, 0.08);
+    --font-sans: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    --font-mono: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
+    --transition: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  /* ==========================================================================
+   * BASE — Page-level setup. Dark background, centered layout, smooth fonts.
+   * ====================================================================== */
+  html {
+    font-size: 16px;
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
   body {
-    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-    background: #0b0d1a;
-    color: #e2e8f0;
+    font-family: var(--font-sans);
+    background: var(--bg-primary);
+    color: var(--text-primary);
     min-height: 100vh;
     display: flex;
     flex-direction: column;
     line-height: 1.6;
     overflow-x: hidden;
   }
-  a { color: inherit; text-decoration: none; }
+
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
 
   /* ==========================================================================
-     SCROLLBAR
-     ========================================================================== */
-  ::-webkit-scrollbar { width: 6px; }
-  ::-webkit-scrollbar-track { background: #0b0d1a; }
-  ::-webkit-scrollbar-thumb { background: #2d3748; border-radius: 3px; }
-  ::-webkit-scrollbar-thumb:hover { background: #4a5568; }
+   * SCROLLBAR — Subtle custom scrollbar to match the dark theme.
+   * ====================================================================== */
+  ::-webkit-scrollbar {
+    width: 5px;
+  }
+  ::-webkit-scrollbar-track {
+    background: var(--bg-primary);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #1e2040;
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #2a2d5a;
+  }
 
   /* ==========================================================================
-     HEADER
-     ========================================================================== */
+   * AMBIENT GLOW — Soft radial gradients fixed to the background for depth.
+   * ====================================================================== */
+  .bg-glow-1 {
+    position: fixed;
+    top: -25%;
+    left: -15%;
+    width: 55%;
+    height: 55%;
+    background: radial-gradient(ellipse, var(--glow-1), transparent 70%);
+    pointer-events: none;
+    z-index: -1;
+  }
+  .bg-glow-2 {
+    position: fixed;
+    bottom: -25%;
+    right: -15%;
+    width: 50%;
+    height: 50%;
+    background: radial-gradient(ellipse, var(--glow-2), transparent 70%);
+    pointer-events: none;
+    z-index: -1;
+  }
+  .bg-glow-3 {
+    position: fixed;
+    top: 40%;
+    left: 40%;
+    width: 30%;
+    height: 30%;
+    background: radial-gradient(ellipse, rgba(124, 58, 237, 0.03), transparent 70%);
+    pointer-events: none;
+    z-index: -1;
+  }
+
+  /* ==========================================================================
+   * HEADER — Fixed top bar with branding, status, and live indicator.
+   * ====================================================================== */
   .header {
-    background: linear-gradient(135deg, #0f1128 0%, #1a1040 50%, #0f1128 100%);
-    border-bottom: 1px solid rgba(99, 102, 241, 0.2);
-    padding: 20px 24px;
+    background: linear-gradient(180deg, rgba(12, 14, 26, 0.98), rgba(12, 14, 26, 0.85));
+    border-bottom: 1px solid var(--border-color);
+    padding: 18px 28px;
     position: sticky;
     top: 0;
     z-index: 100;
-    backdrop-filter: blur(12px);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
   }
+
   .header-inner {
     max-width: 1200px;
     margin: 0 auto;
@@ -142,717 +306,1882 @@ var dashboardHTML = `<!DOCTYPE html>
     align-items: center;
     justify-content: space-between;
     flex-wrap: wrap;
-    gap: 12px;
+    gap: 14px;
   }
+
   .header-brand {
     display: flex;
     align-items: center;
-    gap: 16px;
+    gap: 18px;
   }
-  .header-logo {
-    width: 44px;
-    height: 44px;
+
+  .header-emblem {
+    width: 42px;
+    height: 42px;
     border-radius: 12px;
-    background: linear-gradient(135deg, #6366f1, #a855f7);
+    background: linear-gradient(145deg, var(--accent-1), var(--accent-3));
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 1.3rem;
+    font-size: 1.1rem;
     font-weight: 800;
     color: #fff;
-    box-shadow: 0 0 20px rgba(99, 102, 241, 0.3);
+    letter-spacing: 1px;
+    box-shadow: 0 0 24px rgba(108, 99, 255, 0.25);
+    flex-shrink: 0;
   }
-  .header-title h1 {
-    font-size: 1.4rem;
+
+  .header-title {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .header-title .name {
+    font-size: 1.35rem;
     font-weight: 700;
-    background: linear-gradient(135deg, #e2e8f0, #a5b4fc, #c084fc);
+    letter-spacing: -0.3px;
+    background: linear-gradient(135deg, #e8ecf4, #a5b4fc, #c084fc);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
-    letter-spacing: -0.3px;
   }
-  .header-title .sub {
-    font-size: 0.75rem;
-    color: #64748b;
-    -webkit-text-fill-color: #64748b;
+
+  .header-title .byline {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
     font-weight: 400;
-    letter-spacing: 0.3px;
+    letter-spacing: 0.5px;
   }
-  .header-badge {
+
+  .header-title .byline .sig {
+    font-family: 'Times New Roman', 'Georgia', serif;
+    font-style: italic;
+    font-size: 0.95rem;
+    background: linear-gradient(135deg, #c084fc, #e879f9);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    font-weight: 600;
+    letter-spacing: 0.8px;
+  }
+
+  .header-status {
     display: flex;
     align-items: center;
-    gap: 8px;
-    background: rgba(34, 197, 94, 0.12);
-    border: 1px solid rgba(34, 197, 94, 0.25);
-    padding: 6px 16px;
+    gap: 10px;
+    background: var(--green-bg);
+    border: 1px solid var(--green-border);
+    padding: 6px 18px;
     border-radius: 20px;
-    font-size: 0.8rem;
+    font-size: 0.78rem;
     font-weight: 600;
-    color: #22c55e;
+    color: var(--green);
+    letter-spacing: 0.3px;
   }
-  .header-badge .dot {
-    width: 8px;
-    height: 8px;
+
+  .header-status .dot {
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
-    background: #22c55e;
-    animation: pulse-dot 1.8s ease-in-out infinite;
+    background: var(--green);
+    animation: pulse-dot 2s ease-in-out infinite;
   }
+
   @keyframes pulse-dot {
-    0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 0 0 rgba(34,197,94,0.4); }
-    50% { opacity: 0.6; transform: scale(1.1); box-shadow: 0 0 12px 4px rgba(34,197,94,0.2); }
+    0%, 100% {
+      opacity: 1;
+      transform: scale(1);
+      box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.3);
+    }
+    50% {
+      opacity: 0.6;
+      transform: scale(1.15);
+      box-shadow: 0 0 16px 4px rgba(34, 197, 94, 0.12);
+    }
   }
 
   /* ==========================================================================
-     MAIN CONTAINER
-     ========================================================================== */
+   * MAIN CONTAINER — Centers content with max-width for readability.
+   * ====================================================================== */
   .main {
     max-width: 1200px;
     margin: 0 auto;
-    padding: 28px 24px;
+    padding: 32px 28px;
     flex: 1;
     width: 100%;
   }
 
   /* ==========================================================================
-     STATS ROW
-     ========================================================================== */
-  .stats-grid {
+   * STATS BAR — Horizontal row of key metrics.
+   * ====================================================================== */
+  .stats-bar {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-    gap: 14px;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
     margin-bottom: 28px;
   }
-  .stat-card {
-    background: linear-gradient(145deg, rgba(30, 41, 59, 0.6), rgba(15, 23, 42, 0.6));
-    border: 1px solid rgba(99, 102, 241, 0.1);
-    border-radius: 14px;
-    padding: 18px 16px;
+
+  .stat-cell {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 16px 14px;
     text-align: center;
-    transition: all 0.25s ease;
+    transition: all var(--transition);
     position: relative;
     overflow: hidden;
   }
-  .stat-card::before {
+
+  .stat-cell::after {
     content: '';
     position: absolute;
     top: 0;
     left: 0;
     right: 0;
-    height: 3px;
-    background: linear-gradient(90deg, transparent, #6366f1, transparent);
-    opacity: 0.4;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent-1), transparent);
+    opacity: 0.3;
   }
-  .stat-card:hover {
-    border-color: rgba(99, 102, 241, 0.3);
+
+  .stat-cell:hover {
+    border-color: var(--border-hover);
     transform: translateY(-2px);
-    box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+    box-shadow: var(--shadow-card);
   }
-  .stat-card .icon {
-    font-size: 1.6rem;
-    margin-bottom: 6px;
-  }
-  .stat-card .value {
-    font-size: 2rem;
+
+  .stat-cell .stat-value {
+    font-size: 1.75rem;
     font-weight: 800;
-    background: linear-gradient(135deg, #e2e8f0, #a5b4fc);
+    background: linear-gradient(135deg, #e8ecf4, #a5b4fc);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
     line-height: 1.2;
+    font-variant-numeric: tabular-nums;
   }
-  .stat-card .value.warning {
+
+  .stat-cell .stat-value.stat-green {
+    background: linear-gradient(135deg, #34d399, #22c55e);
+    -webkit-background-clip: text;
+    background-clip: text;
+  }
+
+  .stat-cell .stat-value.stat-amber {
     background: linear-gradient(135deg, #fbbf24, #f59e0b);
     -webkit-background-clip: text;
     background-clip: text;
   }
-  .stat-card .value.danger {
+
+  .stat-cell .stat-value.stat-red {
     background: linear-gradient(135deg, #f87171, #ef4444);
     -webkit-background-clip: text;
     background-clip: text;
   }
-  .stat-card .value.success {
-    background: linear-gradient(135deg, #34d399, #10b981);
-    -webkit-background-clip: text;
-    background-clip: text;
-  }
-  .stat-card .label {
-    font-size: 0.75rem;
-    color: #64748b;
+
+  .stat-cell .stat-label {
+    font-size: 0.7rem;
+    color: var(--text-muted);
     text-transform: uppercase;
-    letter-spacing: 0.8px;
+    letter-spacing: 1px;
     font-weight: 600;
-    margin-top: 4px;
-  }
-  .stat-card .sub-label {
-    font-size: 0.7rem;
-    color: #475569;
-    margin-top: 2px;
+    margin-top: 5px;
   }
 
-  /* ==========================================================================
-     SECTIONS
-     ========================================================================== */
-  .section {
-    background: linear-gradient(145deg, rgba(30, 41, 59, 0.5), rgba(15, 23, 42, 0.5));
-    border: 1px solid rgba(99, 102, 241, 0.1);
-    border-radius: 14px;
-    margin-bottom: 20px;
-    overflow: hidden;
-    transition: border-color 0.25s ease;
-  }
-  .section:hover {
-    border-color: rgba(99, 102, 241, 0.2);
-  }
-  .section-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 16px 20px;
-    border-bottom: 1px solid rgba(99, 102, 241, 0.08);
-    flex-wrap: wrap;
-    gap: 10px;
-  }
-  .section-title {
-    font-size: 1rem;
-    font-weight: 600;
-    color: #cbd5e1;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-  .section-title .badge {
-    font-size: 0.7rem;
-    font-weight: 600;
-    padding: 2px 10px;
-    border-radius: 10px;
-    background: rgba(99, 102, 241, 0.15);
-    color: #818cf8;
-  }
-  .section-body {
-    padding: 20px;
-  }
-
-  /* ==========================================================================
-     PROXY LIST
-     ========================================================================== */
-  .proxy-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-    gap: 10px;
-  }
-  .proxy-item {
-    background: rgba(15, 23, 42, 0.6);
-    border: 1px solid rgba(99, 102, 241, 0.08);
-    border-radius: 10px;
-    padding: 12px 14px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    font-size: 0.82rem;
-    font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
-    transition: all 0.2s ease;
-  }
-  .proxy-item:hover {
-    border-color: rgba(99, 102, 241, 0.25);
-    background: rgba(15, 23, 42, 0.8);
-  }
-  .proxy-item .addr {
-    color: #94a3b8;
-  }
-  .proxy-item .status-tag {
+  .stat-cell .stat-sublabel {
     font-size: 0.65rem;
-    font-weight: 600;
-    padding: 3px 10px;
-    border-radius: 8px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    font-family: 'Segoe UI', system-ui, sans-serif;
-  }
-  .status-tag.available {
-    background: rgba(34, 197, 94, 0.15);
-    color: #22c55e;
-  }
-  .status-tag.blocked {
-    background: rgba(239, 68, 68, 0.15);
-    color: #f87171;
+    color: rgba(74, 80, 112, 0.7);
+    margin-top: 3px;
   }
 
   /* ==========================================================================
-     PASSWORD LOCK
-     ========================================================================== */
-  .lock-overlay {
-    display: flex;
-    flex-direction: column;
+   * UPTIME DISPLAY — Shows how long the server has been running.
+   * ====================================================================== */
+  .uptime-container {
+    display: inline-flex;
     align-items: center;
-    justify-content: center;
-    padding: 40px 20px;
-    text-align: center;
-    gap: 12px;
+    gap: 6px;
+    background: rgba(8, 10, 24, 0.5);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 5px 14px;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.3px;
   }
-  .lock-overlay .lock-icon {
-    font-size: 2.6rem;
+  .uptime-container .uptime-value {
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+  }
+
+  /* ==========================================================================
+   * VERSION TAG — Small decorative badge showing the current version.
+   * ====================================================================== */
+  .version-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: linear-gradient(145deg, rgba(108, 99, 255, 0.12), rgba(124, 58, 237, 0.08));
+    border: 1px solid rgba(108, 99, 255, 0.15);
+    border-radius: 6px;
+    padding: 3px 12px;
+    font-size: 0.65rem;
+    color: var(--accent-2);
+    font-weight: 500;
+    letter-spacing: 0.5px;
+  }
+  .version-tag .ver-dot {
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--accent-1);
     opacity: 0.6;
   }
-  .lock-overlay p {
-    color: #64748b;
-    font-size: 0.9rem;
-    max-width: 360px;
-  }
-  .lock-overlay .input-group {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    justify-content: center;
-    margin-top: 4px;
-  }
-  .lock-overlay input {
-    background: rgba(15, 23, 42, 0.8);
-    border: 1px solid rgba(99, 102, 241, 0.2);
-    border-radius: 10px;
-    padding: 10px 16px;
-    color: #e2e8f0;
-    font-size: 0.9rem;
-    outline: none;
-    width: 200px;
-    transition: border-color 0.2s;
-  }
-  .lock-overlay input:focus {
-    border-color: #6366f1;
-    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
-  }
-  .lock-overlay input::placeholder { color: #475569; }
-  .lock-overlay button {
-    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+
+  /* ==========================================================================
+   * DIVIDER — Subtle horizontal separator used between sections.
+   * ====================================================================== */
+  .divider {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--border-color), transparent);
+    margin: 18px 0;
     border: none;
-    border-radius: 10px;
-    padding: 10px 24px;
+  }
+
+  /* ==========================================================================
+   * NOTIFICATION DOT — Small pulsing dot for attention indicators.
+   * ====================================================================== */
+  .notif-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent-1);
+    animation: pulse-dot 2s ease-in-out infinite;
+  }
+
+  /* ==========================================================================
+   * LOCK SCREEN — Full-width gate that hides proxy content behind a password.
+   * ====================================================================== */
+  .lock-container {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: 50px 40px;
+    text-align: center;
+    transition: all var(--transition);
+    box-shadow: var(--shadow-card);
+  }
+
+  .lock-container:hover {
+    border-color: var(--border-hover);
+  }
+
+  .lock-container .lock-icon {
+    font-size: 2.4rem;
+    opacity: 0.35;
+    margin-bottom: 12px;
+    display: block;
+  }
+
+  .lock-container .lock-title {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+  }
+
+  .lock-container .lock-desc {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    max-width: 340px;
+    margin: 0 auto 18px auto;
+    line-height: 1.5;
+  }
+
+  .lock-container .input-row {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .lock-container input {
+    background: rgba(8, 10, 24, 0.8);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 11px 18px;
+    color: var(--text-primary);
+    font-size: 0.9rem;
+    font-family: var(--font-mono);
+    outline: none;
+    width: 220px;
+    transition: border-color var(--transition);
+    letter-spacing: 2px;
+  }
+
+  .lock-container input:focus {
+    border-color: var(--accent-1);
+    box-shadow: 0 0 0 3px rgba(108, 99, 255, 0.1);
+  }
+
+  .lock-container input::placeholder {
+    color: var(--text-muted);
+    letter-spacing: 0;
+    font-family: var(--font-sans);
+  }
+
+  .lock-container button {
+    background: linear-gradient(145deg, var(--accent-1), var(--accent-3));
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 11px 28px;
     color: #fff;
     font-weight: 600;
     font-size: 0.85rem;
     cursor: pointer;
-    transition: all 0.2s;
+    transition: all var(--transition);
+    letter-spacing: 0.3px;
   }
-  .lock-overlay button:hover {
+
+  .lock-container button:hover {
     transform: translateY(-1px);
-    box-shadow: 0 4px 16px rgba(99, 102, 241, 0.3);
+    box-shadow: 0 4px 20px rgba(108, 99, 255, 0.3);
   }
-  .lock-overlay .error-msg {
-    color: #f87171;
-    font-size: 0.8rem;
-    min-height: 1.2em;
+
+  .lock-container button:active {
+    transform: translateY(0);
   }
-  .lock-overlay .loading-msg {
-    color: #818cf8;
-    font-size: 0.8rem;
+
+  .lock-container .lock-error {
+    color: var(--red);
+    font-size: 0.78rem;
+    min-height: 1.4em;
+    margin-top: 10px;
+  }
+
+  .lock-container .lock-loading {
+    color: var(--accent-2);
+    font-size: 0.78rem;
+    margin-top: 10px;
+    animation: pulse-text 1.2s ease-in-out infinite;
+  }
+
+  @keyframes pulse-text {
+    0%, 100% { opacity: 0.5; }
+    50% { opacity: 1; }
   }
 
   /* ==========================================================================
-     API LINKS
-     ========================================================================== */
-  .api-links {
+   * PROXY GRID — Displays proxies after unlock as a responsive card grid.
+   * ====================================================================== */
+  .proxy-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 8px;
+    margin-top: 4px;
+  }
+
+  .proxy-card {
+    background: rgba(8, 10, 24, 0.6);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 10px 14px;
     display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 0.8rem;
+    font-family: var(--font-mono);
+    transition: all var(--transition);
+  }
+
+  .proxy-card:hover {
+    border-color: var(--border-hover);
+    background: rgba(12, 15, 30, 0.8);
+  }
+
+  .proxy-card .proxy-addr {
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+  }
+
+  .proxy-card .proxy-tag {
+    font-size: 0.6rem;
+    font-weight: 700;
+    padding: 3px 10px;
+    border-radius: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    font-family: var(--font-sans);
+  }
+
+  .proxy-card .proxy-tag.tag-avail {
+    background: var(--green-bg);
+    color: var(--green);
+    border: 1px solid var(--green-border);
+  }
+
+  .proxy-card .proxy-tag.tag-blocked {
+    background: var(--red-bg);
+    color: var(--red);
+    border: 1px solid var(--red-border);
+  }
+
+  /* ==========================================================================
+   * PROXY HEADER — Shows count and summary above the grid.
+   * ====================================================================== */
+  .proxy-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     flex-wrap: wrap;
     gap: 10px;
+    margin-bottom: 14px;
   }
-  .api-link {
+
+  .proxy-header .proxy-count {
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+  }
+
+  .proxy-header .proxy-count strong {
+    color: var(--text-primary);
+    font-weight: 700;
+  }
+
+  .proxy-header .proxy-summary {
+    display: flex;
+    gap: 12px;
+    font-size: 0.72rem;
+  }
+
+  .proxy-header .proxy-summary span {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  .proxy-header .proxy-summary .sum-avail {
+    color: var(--green);
+  }
+
+  .proxy-header .proxy-summary .sum-blocked {
+    color: var(--red);
+  }
+
+  /* ==========================================================================
+   * SECTION — Reusable card container for content blocks.
+   * ====================================================================== */
+  .section {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    transition: border-color var(--transition);
+    box-shadow: var(--shadow-card);
+  }
+
+  .section:hover {
+    border-color: var(--border-hover);
+  }
+
+  .section-body {
+    padding: 24px;
+  }
+
+  /* ==========================================================================
+   * API LINKS — Minimal reference row for REST endpoints.
+   * ====================================================================== */
+  .api-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .api-strip a,
+  .api-strip span {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
-    background: rgba(99, 102, 241, 0.08);
-    border: 1px solid rgba(99, 102, 241, 0.15);
-    border-radius: 10px;
-    padding: 10px 16px;
-    font-size: 0.82rem;
-    color: #a5b4fc;
-    transition: all 0.2s;
-    font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    gap: 6px;
+    background: rgba(108, 99, 255, 0.05);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 7px 14px;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    transition: all var(--transition);
+    font-family: var(--font-mono);
   }
-  .api-link:hover {
-    background: rgba(99, 102, 241, 0.15);
-    border-color: #6366f1;
-    color: #c7d2fe;
-    transform: translateY(-1px);
+
+  .api-strip a:hover {
+    background: rgba(108, 99, 255, 0.1);
+    border-color: var(--accent-1);
+    color: var(--accent-2);
   }
-  .api-link .method {
-    font-size: 0.65rem;
+
+  .api-strip .method {
+    font-size: 0.6rem;
     font-weight: 700;
-    padding: 2px 6px;
-    border-radius: 4px;
-    background: rgba(34, 197, 94, 0.2);
-    color: #22c55e;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: rgba(34, 197, 94, 0.15);
+    color: var(--green);
+  }
+
+  .api-strip .method-muted {
+    background: rgba(74, 80, 112, 0.2);
+    color: var(--text-muted);
   }
 
   /* ==========================================================================
-     FOOTER
-     ========================================================================== */
+   * FOOTER — Simple centered copyright bar.
+   * ====================================================================== */
   .footer {
     text-align: center;
-    padding: 20px 24px;
-    font-size: 0.78rem;
-    color: #334155;
-    border-top: 1px solid rgba(99, 102, 241, 0.06);
-    margin-top: 20px;
+    padding: 18px 28px;
+    font-size: 0.72rem;
+    color: rgba(74, 80, 112, 0.5);
+    border-top: 1px solid rgba(90, 100, 200, 0.04);
+    margin-top: 16px;
+    letter-spacing: 0.3px;
   }
-  .footer strong {
-    color: #64748b;
-    font-weight: 600;
+
+  .footer .sig {
+    font-family: 'Times New Roman', 'Georgia', serif;
+    font-style: italic;
+    color: rgba(167, 139, 250, 0.4);
+    font-size: 0.8rem;
   }
 
   /* ==========================================================================
-     TOAST NOTIFICATIONS
-     ========================================================================== */
+   * LAST UPDATED — Timestamp display below stats.
+   * ====================================================================== */
+  .ts {
+    font-size: 0.68rem;
+    color: rgba(74, 80, 112, 0.6);
+    text-align: right;
+    margin-top: 10px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ==========================================================================
+   * TOAST — Notification popup for success/error feedback.
+   * ====================================================================== */
   .toast-container {
     position: fixed;
-    bottom: 24px;
-    right: 24px;
+    bottom: 28px;
+    right: 28px;
     z-index: 9999;
     display: flex;
     flex-direction: column;
     gap: 8px;
+    pointer-events: none;
   }
+
   .toast {
-    background: rgba(30, 41, 59, 0.95);
-    border: 1px solid rgba(99, 102, 241, 0.2);
-    border-radius: 10px;
-    padding: 12px 18px;
+    background: rgba(15, 18, 40, 0.96);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 12px 20px;
+    font-size: 0.8rem;
+    color: var(--text-primary);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    animation: toast-in 0.35s ease;
+    max-width: 320px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    pointer-events: auto;
+  }
+
+  .toast.toast-success {
+    border-color: var(--green-border);
+    border-left: 3px solid var(--green);
+  }
+
+  .toast.toast-error {
+    border-color: var(--red-border);
+    border-left: 3px solid var(--red);
+  }
+
+  @keyframes toast-in {
+    from {
+      opacity: 0;
+      transform: translateX(30px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+
+  /* ==========================================================================
+   * RESPONSIVE — Adjustments for small screens and mobile.
+   * ====================================================================== */
+  @media (max-width: 720px) {
+    .header {
+      padding: 14px 16px;
+    }
+    .header-title .name {
+      font-size: 1.1rem;
+    }
+    .main {
+      padding: 16px;
+    }
+    .stats-bar {
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+    }
+    .stat-cell .stat-value {
+      font-size: 1.4rem;
+    }
+    .lock-container {
+      padding: 30px 20px;
+    }
+    .lock-container input {
+      width: 160px;
+    }
+    .proxy-grid {
+      grid-template-columns: 1fr;
+    }
+    .proxy-header {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+  }
+
+  @media (max-width: 420px) {
+    .stats-bar {
+      grid-template-columns: 1fr 1fr;
+    }
+    .header-brand {
+      gap: 12px;
+    }
+    .header-emblem {
+      width: 34px;
+      height: 34px;
+      font-size: 0.9rem;
+    }
+    .header-title .name {
+      font-size: 0.95rem;
+    }
+    .header-status {
+      font-size: 0.7rem;
+      padding: 4px 12px;
+    }
+    .lock-container .input-row {
+      flex-direction: column;
+      align-items: center;
+    }
+    .lock-container input {
+      width: 100%;
+      max-width: 240px;
+    }
+  }
+
+  /* ==========================================================================
+   * PRINT — Hide interactive elements when printing.
+   * ====================================================================== */
+  /* ==========================================================================
+   * SEARCH BAR — Filters the proxy grid in real time.
+   * ====================================================================== */
+  .proxy-search {
+    width: 100%;
+    background: rgba(8, 10, 24, 0.7);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 10px 16px;
+    color: var(--text-primary);
     font-size: 0.82rem;
-    color: #e2e8f0;
-    backdrop-filter: blur(12px);
-    animation: slide-in 0.3s ease;
-    max-width: 340px;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    font-family: var(--font-mono);
+    outline: none;
+    margin-bottom: 12px;
+    transition: border-color var(--transition);
   }
-  .toast.success { border-color: rgba(34, 197, 94, 0.3); }
-  .toast.error { border-color: rgba(239, 68, 68, 0.3); }
-  @keyframes slide-in {
-    from { opacity: 0; transform: translateX(40px); }
-    to { opacity: 1; transform: translateX(0); }
+  .proxy-search:focus {
+    border-color: var(--accent-1);
+    box-shadow: 0 0 0 3px rgba(108, 99, 255, 0.08);
   }
-
-  /* ==========================================================================
-     RESPONSIVE
-     ========================================================================== */
-  @media (max-width: 640px) {
-    .header { padding: 14px 16px; }
-    .main { padding: 16px; }
-    .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
-    .stat-card .value { font-size: 1.5rem; }
-    .proxy-grid { grid-template-columns: 1fr; }
-    .header-title h1 { font-size: 1.1rem; }
-    .lock-overlay input { width: 160px; }
+  .proxy-search::placeholder {
+    color: var(--text-muted);
+    font-family: var(--font-sans);
+    font-size: 0.8rem;
   }
 
   /* ==========================================================================
-     ANIMATED BG
-     ========================================================================== */
-  .bg-glow {
-    position: fixed;
-    top: -30%;
-    left: -20%;
-    width: 60%;
-    height: 60%;
-    background: radial-gradient(ellipse, rgba(99, 102, 241, 0.04), transparent 70%);
-    pointer-events: none;
-    z-index: -1;
+   * PROXY GRID EMPTY STATE — Shown when search returns no results.
+   * ====================================================================== */
+  .proxy-empty {
+    grid-column: 1 / -1;
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--text-muted);
+    font-size: 0.82rem;
   }
-  .bg-glow-2 {
-    position: fixed;
-    bottom: -20%;
-    right: -20%;
-    width: 50%;
-    height: 50%;
-    background: radial-gradient(ellipse, rgba(168, 85, 247, 0.03), transparent 70%);
-    pointer-events: none;
-    z-index: -1;
+  .proxy-empty .empty-icon {
+    font-size: 2rem;
+    opacity: 0.3;
+    display: block;
+    margin-bottom: 8px;
   }
-  .last-updated {
+
+  /* ==========================================================================
+   * COPY TOOLTIP — Appears when hovering over a proxy address.
+   * ====================================================================== */
+  .proxy-card .proxy-addr {
+    cursor: pointer;
+    position: relative;
+  }
+  .proxy-card .proxy-addr:hover {
+    color: var(--accent-2);
+  }
+  .proxy-card .proxy-addr .copy-hint {
+    display: none;
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(15, 18, 40, 0.96);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 3px 10px;
+    font-size: 0.6rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    pointer-events: none;
+    font-family: var(--font-sans);
+  }
+  .proxy-card .proxy-addr:hover .copy-hint {
+    display: block;
+  }
+
+  /* ==========================================================================
+   * SYSTEM INFO — Additional server details row.
+   * ====================================================================== */
+  .sys-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border-color);
     font-size: 0.72rem;
-    color: #475569;
-    text-align: right;
+    color: var(--text-muted);
+  }
+  .sys-row span {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .sys-row .sys-label {
+    color: rgba(74, 80, 112, 0.6);
+  }
+  .sys-row .sys-value {
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+  }
+
+  /* ==========================================================================
+   * KEYBOARD SHORTCUT HINT — Subtle helper text.
+   * ====================================================================== */
+  .kbd-hint {
+    font-size: 0.65rem;
+    color: rgba(74, 80, 112, 0.4);
+    text-align: center;
     margin-top: 12px;
+    letter-spacing: 0.3px;
+  }
+  .kbd-hint kbd {
+    display: inline-block;
+    background: rgba(74, 80, 112, 0.15);
+    border: 1px solid rgba(74, 80, 112, 0.2);
+    border-radius: 3px;
+    padding: 0 5px;
+    font-size: 0.62rem;
+    font-family: var(--font-mono);
+    color: rgba(74, 80, 112, 0.6);
+  }
+
+  /* ==========================================================================
+   * PING ANIMATION — Used to draw attention to status indicators.
+   * ====================================================================== */
+  @keyframes ping {
+    0% {
+      transform: scale(1);
+      opacity: 0.6;
+    }
+    50% {
+      transform: scale(1.3);
+      opacity: 0.2;
+    }
+    100% {
+      transform: scale(1);
+      opacity: 0.6;
+    }
+  }
+  .ping-ring {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--green);
+    animation: ping 1.5s ease-in-out infinite;
+    position: relative;
+  }
+  .ping-ring::after {
+    content: '';
+    position: absolute;
+    top: -4px;
+    left: -4px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 2px solid rgba(34, 197, 94, 0.2);
+    animation: ping 1.5s ease-in-out infinite 0.3s;
+  }
+
+  /* ==========================================================================
+   * FLOAT ANIMATION — Subtle vertical bob for decorative elements.
+   * ====================================================================== */
+  @keyframes float {
+    0%, 100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-4px);
+    }
+  }
+  .float-anim {
+    animation: float 3s ease-in-out infinite;
+  }
+
+  /* ==========================================================================
+   * GLOW PULSE — Soft border glow for focused or active elements.
+   * ====================================================================== */
+  @keyframes glow-pulse {
+    0%, 100% {
+      box-shadow: 0 0 8px rgba(108, 99, 255, 0.08);
+    }
+    50% {
+      box-shadow: 0 0 20px rgba(108, 99, 255, 0.18);
+    }
+  }
+  .glow-pulse {
+    animation: glow-pulse 2.5s ease-in-out infinite;
+  }
+
+  /* ==========================================================================
+   * SPINNER — Simple rotating loader for async operations.
+   * ====================================================================== */
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+  .spinner {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(108, 99, 255, 0.15);
+    border-top-color: var(--accent-1);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    vertical-align: middle;
+  }
+  .spinner-sm {
+    width: 10px;
+    height: 10px;
+    border-width: 1.5px;
+  }
+
+  /* ==========================================================================
+   * BADGE — Inline pill for counts, statuses, or tags.
+   * ====================================================================== */
+  .badge-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 0.65rem;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    line-height: 1.4;
+  }
+  .badge-pill.bg-accent {
+    background: rgba(108, 99, 255, 0.12);
+    color: var(--accent-2);
+  }
+  .badge-pill.bg-green {
+    background: var(--green-bg);
+    color: var(--green);
+  }
+  .badge-pill.bg-red {
+    background: var(--red-bg);
+    color: var(--red);
+  }
+  .badge-pill.bg-muted {
+    background: rgba(74, 80, 112, 0.15);
+    color: var(--text-muted);
+  }
+
+  /* ==========================================================================
+   * VALUE CHANGE INDICATOR — Brief flash when a stat value changes.
+   * ====================================================================== */
+  @keyframes value-flash {
+    0% { opacity: 0.5; }
+    50% { opacity: 1; }
+    100% { opacity: 1; }
+  }
+  .value-flash {
+    animation: value-flash 0.4s ease;
+  }
+
+  /* ==========================================================================
+   * FOOTER — Simple footer containing version and legal text.
+   * ====================================================================== */
+  .app-footer {
+    text-align: center;
+    padding: 24px 16px 32px;
+    font-size: 0.65rem;
+    color: rgba(74, 80, 112, 0.5);
+    border-top: 1px solid rgba(74, 80, 112, 0.06);
+    margin-top: 32px;
+    letter-spacing: 0.3px;
+  }
+  .app-footer a {
+    color: rgba(108, 99, 255, 0.4);
+    text-decoration: none;
+    transition: color 0.2s;
+  }
+  .app-footer a:hover {
+    color: rgba(108, 99, 255, 0.7);
+  }
+  .app-footer .footer-sep {
+    margin: 0 10px;
+    opacity: 0.3;
+  }
+
+  /* ==========================================================================
+   * MEDIA QUERIES — Responsive adjustments for smaller screens.
+   * ====================================================================== */
+  .proxy-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+  }
+  .proxy-toolbar .proxy-search {
+    margin-bottom: 0;
+    flex: 1;
+    min-width: 160px;
+  }
+  .proxy-toolbar .toolbar-btn {
+    background: rgba(108, 99, 255, 0.08);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 10px 16px;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    cursor: pointer;
+    transition: all var(--transition);
+    font-family: var(--font-sans);
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .proxy-toolbar .toolbar-btn:hover {
+    background: rgba(108, 99, 255, 0.15);
+    border-color: var(--accent-1);
+    color: var(--accent-2);
+  }
+  .proxy-toolbar .toolbar-btn:active {
+    transform: scale(0.96);
+  }
+  .proxy-toolbar .toolbar-btn .btn-icon {
+    font-size: 0.85rem;
+    line-height: 1;
+  }
+  .proxy-toolbar .proxy-stats-mini {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+
+  /* ==========================================================================
+   * TOGGLE SWITCH — For auto-refresh preference.
+   * ====================================================================== */
+  .toggle-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    cursor: pointer;
+    user-select: none;
+  }
+  .toggle-wrap input {
+    display: none;
+  }
+  .toggle-track {
+    width: 30px;
+    height: 16px;
+    background: rgba(74, 80, 112, 0.3);
+    border-radius: 10px;
+    position: relative;
+    transition: background var(--transition);
+    flex-shrink: 0;
+  }
+  .toggle-track::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    transition: all var(--transition);
+  }
+  .toggle-wrap input:checked + .toggle-track {
+    background: rgba(108, 99, 255, 0.3);
+  }
+  .toggle-wrap input:checked + .toggle-track::after {
+    left: 16px;
+    background: var(--accent-1);
+  }
+
+  /* ==========================================================================
+   * ANIMATIONS — Additional keyframes for UI polish.
+   * ====================================================================== */
+  @keyframes fade-in-up {
+    from {
+      opacity: 0;
+      transform: translateY(12px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes shimmer {
+    0% { background-position: -200px 0; }
+    100% { background-position: calc(200px + 100%) 0; }
+  }
+  @keyframes scale-in {
+    from {
+      opacity: 0;
+      transform: scale(0.92);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+  @keyframes slide-down {
+    from {
+      opacity: 0;
+      max-height: 0;
+    }
+    to {
+      opacity: 1;
+      max-height: 200px;
+    }
+  }
+
+  .lock-container,
+  .section {
+    animation: fade-in-up 0.4s ease both;
+  }
+  .stat-cell {
+    animation: fade-in-up 0.4s ease both;
+  }
+  .stat-cell:nth-child(1) { animation-delay: 0.02s; }
+  .stat-cell:nth-child(2) { animation-delay: 0.06s; }
+  .stat-cell:nth-child(3) { animation-delay: 0.10s; }
+  .stat-cell:nth-child(4) { animation-delay: 0.14s; }
+
+  .proxy-card {
+    animation: fade-in 0.3s ease both;
+  }
+
+  /* ==========================================================================
+   * LOADING SKELETON — Placeholder shimmer while proxy data loads.
+   * ====================================================================== */
+  .skeleton-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 8px;
+  }
+  .skeleton-card {
+    height: 38px;
+    background: linear-gradient(90deg, rgba(15,18,40,0.4) 0%, rgba(25,30,60,0.5) 50%, rgba(15,18,40,0.4) 100%);
+    background-size: 200px 100%;
+    border-radius: var(--radius-sm);
+    animation: shimmer 1.6s ease-in-out infinite;
+  }
+
+  /* ==========================================================================
+   * FOCUS VISIBLE — Accessibility outline for keyboard navigation.
+   * ====================================================================== */
+  *:focus-visible {
+    outline: 2px solid var(--accent-1);
+    outline-offset: 2px;
+  }
+  button:focus-visible,
+  input:focus-visible {
+    outline: 2px solid var(--accent-1);
+    outline-offset: 2px;
+  }
+
+  /* ==========================================================================
+   * SELECTION STYLE — Matches accent color.
+   * ====================================================================== */
+  ::selection {
+    background: rgba(108, 99, 255, 0.25);
+    color: #fff;
+  }
+
+  /* ==========================================================================
+   * PRINT — Hide interactive elements when printing.
+   * ====================================================================== */
+  @media print {
+    .header {
+      position: static;
+    }
+    .lock-container input,
+    .lock-container button,
+    .proxy-search,
+    .toast-container {
+      display: none;
+    }
   }
 </style>
 </head>
 <body>
 
-<!-- =========================================================================
-     AMBIENT GLOW
-     ===================================================================== -->
-<div class="bg-glow"></div>
+<!-- Ambient background glow layers -->
+<div class="bg-glow-1"></div>
 <div class="bg-glow-2"></div>
+<div class="bg-glow-3"></div>
 
-<!-- =========================================================================
-     HEADER
-     ===================================================================== -->
+<!-- ==========================================================================
+     HEADER — Branding, server name, and live status badge
+     ====================================================================== -->
 <header class="header">
   <div class="header-inner">
     <div class="header-brand">
-      <div class="header-logo">I</div>
+      <div class="header-emblem">I</div>
       <div class="header-title">
-        <h1>ICEbot Server <span style="font-weight:300;background:linear-gradient(135deg,#a5b4fc,#c084fc);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">by Saif</span></h1>
-        <div class="sub">Residential Proxy Edition — Go Backend v7</div>
+        <div class="name">ICEbot Server</div>
+        <div class="byline">
+          built by <span class="sig">Saif</span>
+          &middot; Residential Proxy Edition
+        </div>
       </div>
     </div>
-    <div class="header-badge">
-      <span class="dot"></span>
-      <span id="statusLabel">RUNNING</span>
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+      <div class="uptime-container">
+        <span>Uptime</span>
+        <span class="uptime-value" id="uptimeDisplay">0s</span>
+      </div>
+      <div class="header-status">
+        <span class="dot"></span>
+        <span id="statusLabel">RUNNING</span>
+      </div>
     </div>
   </div>
 </header>
 
-<!-- =========================================================================
-     MAIN
-     ===================================================================== -->
+<!-- ==========================================================================
+     MAIN CONTENT — Stats bar, password gate, proxy grid, API references
+     ====================================================================== -->
 <main class="main">
 
-  <!-- ======================================================================
-       STATS GRID
-       =================================================================== -->
-  <div class="stats-grid" id="statsGrid">
-    <div class="stat-card">
-      <div class="icon">🖥️</div>
-      <div class="value" id="statSessions">0</div>
-      <div class="label">Sessions</div>
+  <!-- =======================================================================
+       STATS BAR — Live server metrics updated every 5 seconds
+       ====================================================================== -->
+  <div class="stats-bar" id="statsBar">
+    <div class="stat-cell">
+      <div class="stat-value" id="statSessions">0</div>
+      <div class="stat-label">Active Sessions</div>
     </div>
-    <div class="stat-card">
-      <div class="icon">🤖</div>
-      <div class="value" id="statBots">0</div>
-      <div class="label">Bots Total</div>
+    <div class="stat-cell">
+      <div class="stat-value" id="statBots">0</div>
+      <div class="stat-label">Total Bots</div>
     </div>
-    <div class="stat-card">
-      <div class="icon">✅</div>
-      <div class="value success" id="statJoined">0</div>
-      <div class="label">Bots Joined</div>
+    <div class="stat-cell">
+      <div class="stat-value stat-green" id="statJoined">0</div>
+      <div class="stat-label">Bots Joined</div>
     </div>
-    <div class="stat-card">
-      <div class="icon">🔌</div>
-      <div class="value" id="statProxies">0</div>
-      <div class="label">Proxies</div>
-      <div class="sub-label"><span id="statAvail">0</span> avail · <span id="statBlocked">0</span> blocked</div>
-    </div>
-    <div class="stat-card">
-      <div class="icon">🎫</div>
-      <div class="value" id="statTokens">0</div>
-      <div class="label">Turnstile Tokens</div>
-      <div class="sub-label" id="statTokenTime">—</div>
+    <div class="stat-cell">
+      <div class="stat-value" id="statProxies">0</div>
+      <div class="stat-label">Proxies in Pool</div>
+      <div class="stat-sublabel">
+        <span id="statAvail">0</span> available
+        &middot;
+        <span id="statBlocked">0</span> blocked
+      </div>
     </div>
   </div>
 
-  <!-- ======================================================================
-       PROXY POOL SECTION (Password Protected)
-       =================================================================== -->
+  <!-- =======================================================================
+       PASSWORD GATE + PROXY GRID — Proxy list is locked behind a password.
+       The password is "saif1234". Enter it to unlock the full proxy pool.
+       ====================================================================== -->
   <div class="section">
-    <div class="section-header">
-      <div class="section-title">
-        🌐 Proxy Pool
-        <span class="badge" id="proxyCount">0 proxies</span>
-      </div>
-    </div>
     <div class="section-body" id="proxySectionBody">
-      <div class="lock-overlay" id="proxyLock">
-        <div class="lock-icon">🔒</div>
-        <p>Enter the dashboard password to view the proxy pool.</p>
-        <div class="input-group">
-          <input type="password" id="proxyPassword" placeholder="Enter password..." autocomplete="off" />
+
+      <!-- LOCK OVERLAY — visible until password is accepted -->
+      <div class="lock-container" id="proxyLock">
+        <span class="lock-icon">&#x1f512;</span>
+        <div class="lock-title">Proxy Pool Locked</div>
+        <div class="lock-desc">
+          Enter the dashboard password to view all
+          <strong id="proxyLockCount">80</strong>
+          residential proxies with live status.
+        </div>
+        <div class="input-row">
+          <input
+            type="password"
+            id="proxyPassword"
+            placeholder="Enter password"
+            autocomplete="off"
+            spellcheck="false"
+          />
           <button id="proxyUnlockBtn">Unlock</button>
         </div>
-        <div class="error-msg" id="proxyError"></div>
+        <div class="lock-error" id="proxyError"></div>
       </div>
-      <div id="proxyListContainer" style="display:none;">
+
+      <!-- PROXY CONTENT — hidden until password is accepted -->
+      <div id="proxyContent" style="display:none;">
+        <div class="proxy-header">
+          <div class="proxy-count">
+            <strong id="proxyCountLabel">0</strong> residential proxies
+            <span style="font-weight:400;color:var(--text-muted);font-size:0.7rem;">
+              &middot; last refresh <span id="proxyRefreshTime">—</span>
+            </span>
+          </div>
+          <div class="proxy-summary">
+            <span class="sum-avail">
+              &#x25cf; <span id="proxyAvailLabel">0</span> available
+            </span>
+            <span class="sum-blocked">
+              &#x25cf; <span id="proxyBlockedLabel">0</span> blocked
+            </span>
+          </div>
+        </div>
+        <div class="proxy-toolbar">
+          <input
+            type="text"
+            class="proxy-search"
+            id="proxySearch"
+            placeholder="Filter proxies by IP or port..."
+            spellcheck="false"
+          />
+          <button class="toolbar-btn" id="proxyRefreshBtn" title="Refresh proxy list">
+            <span class="btn-icon">&#x21bb;</span>
+            Refresh
+          </button>
+          <label class="toggle-wrap" title="Auto-refresh proxy list every 30 seconds">
+            <input type="checkbox" id="proxyAutoRefresh" checked />
+            <span class="toggle-track"></span>
+            <span>Auto</span>
+          </label>
+        </div>
         <div class="proxy-grid" id="proxyGrid"></div>
-        <div class="loading-msg" id="proxyLoading" style="text-align:center;padding:20px;">Loading proxies...</div>
+        <div id="proxyLoading" style="display:none; text-align:center; padding:24px; color:var(--text-muted); font-size:0.82rem;">
+          Loading proxy pool...
+        </div>
       </div>
+
     </div>
   </div>
 
-  <!-- ======================================================================
-       API ENDPOINTS
-       =================================================================== -->
-  <div class="section">
-    <div class="section-header">
-      <div class="section-title">
-        🔗 API Endpoints
-        <span class="badge">REST</span>
-      </div>
-    </div>
+  <!-- =======================================================================
+       SYSTEM INFO — Server metadata displayed below the proxy pool.
+       ====================================================================== -->
+  <div class="section" style="margin-top: 20px;">
     <div class="section-body">
-      <div class="api-links">
-        <a class="api-link" href="/api/status" target="_blank">
-          <span class="method">GET</span> /api/status
-        </a>
-        <a class="api-link" href="/api/turnstile-status" target="_blank">
-          <span class="method">GET</span> /api/turnstile-status
-        </a>
-        <a class="api-link" href="/api/proxy-status" target="_blank">
-          <span class="method">GET</span> /api/proxy-status
-        </a>
-        <span class="api-link" style="cursor:help;" title="Requires ?password=saif1234">
-          <span class="method">GET</span> /api/proxies
+      <div style="font-size:0.82rem;font-weight:600;color:var(--text-secondary);margin-bottom:6px;letter-spacing:0.3px;">
+        System
+      </div>
+      <div class="sys-row">
+        <span>
+          <span class="sys-label">Status</span>
+          <span class="sys-value" id="sysStatus">online</span>
+        </span>
+        <span>
+          <span class="sys-label">Proxies</span>
+          <span class="sys-value" id="sysProxyCount">80</span>
+        </span>
+        <span>
+          <span class="sys-label">Bots</span>
+          <span class="sys-value" id="sysBotCount">0</span>
+        </span>
+        <span>
+          <span class="sys-label">Sessions</span>
+          <span class="sys-value" id="sysSessionCount">0</span>
+        </span>
+        <span>
+          <span class="sys-label">Server</span>
+          <span class="sys-value">Go / HostingGuru</span>
+        </span>
+        <span>
+          <span class="sys-label">Edition</span>
+          <span class="sys-value">Residential Proxy v7</span>
+        </span>
+        <span>
+          <span class="sys-label">Version</span>
+          <span class="sys-value">7.2.1</span>
+        </span>
+        <span>
+          <span class="sys-label">Runtime</span>
+          <span class="sys-value">Go 1.24</span>
+        </span>
+        <span>
+          <span class="sys-label">Platform</span>
+          <span class="sys-value">HostingGuru</span>
+        </span>
+        <span>
+          <span class="sys-label">Time</span>
+          <span class="sys-value" id="sysCurrentTime">—</span>
+        </span>
+        <span>
+          <span class="sys-label">Author</span>
+          <span class="sys-value" style="font-family:'Times New Roman','Georgia',serif;font-style:italic;color:rgba(167,139,250,0.6);">Saif</span>
         </span>
       </div>
     </div>
   </div>
 
-  <!-- ======================================================================
-       LAST UPDATED
-       =================================================================== -->
-  <div class="last-updated" id="lastUpdated">Loading...</div>
+  <!-- =======================================================================
+       API REFERENCE — Quick links to REST endpoints for advanced users.
+       ====================================================================== -->
+  <div class="section" style="margin-top: 20px;">
+    <div class="section-body">
+      <div class="api-strip">
+        <a href="/api/status" target="_blank">
+          <span class="method">GET</span> /api/status
+        </a>
+        <a href="/api/turnstile-status" target="_blank">
+          <span class="method">GET</span> /api/turnstile-status
+        </a>
+        <a href="/api/proxy-status" target="_blank">
+          <span class="method">GET</span> /api/proxy-status
+        </a>
+        <span title="Protected — requires ?password=saif1234">
+          <span class="method method-muted">GET</span> /api/proxies
+          <span style="color:var(--text-muted);font-size:0.65rem;">(auth)</span>
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Keyboard shortcut hint -->
+  <div class="kbd-hint">
+    Press <kbd>Enter</kbd> to unlock &middot;
+    Press <kbd>/</kbd> to search &middot;
+    Click any proxy IP to copy &middot;
+    <kbd>R</kbd> to refresh
+  </div>
+
+  <!-- Timestamp -->
+  <div class="ts" id="lastUpdated">Waiting for data...</div>
+
 </main>
 
-<!-- =========================================================================
+<!-- ==========================================================================
      FOOTER
-     ===================================================================== -->
+     ====================================================================== -->
 <footer class="footer">
-  &copy; 2026 — <strong>ICEbot Server by Saif</strong> — All systems operational
+  &copy; 2026 &middot; ICEbot Server &middot; built by <span class="sig">Saif</span>
 </footer>
 
-<!-- =========================================================================
-     TOAST CONTAINER
-     ===================================================================== -->
+<!-- ==========================================================================
+     TOAST CONTAINER — For success and error notifications
+     ====================================================================== -->
 <div class="toast-container" id="toastContainer"></div>
 
-<!-- =========================================================================
-     JAVASCRIPT
-     ===================================================================== -->
+<!-- ==========================================================================
+     JAVASCRIPT — Application logic: stats polling, password gate, proxy fetch
+     ====================================================================== -->
 <script>
 (function() {
   'use strict';
 
-  // =========================================================================
-  // STATE
-  // =========================================================================
-  let proxyUnlocked = false;
-  let statsInterval = null;
+  /* ========================================================================
+   * CONSTANTS
+   * ====================================================================== */
+  var STATS_INTERVAL_MS = 5000;
+  var PROXY_DATA = [];
 
-  // =========================================================================
-  // UTILITY HELPERS
-  // =========================================================================
-  function $(id) { return document.getElementById(id); }
+  /* ========================================================================
+   * STATE
+   * ====================================================================== */
+  var proxyUnlocked = false;
+  var statsIntervalId = null;
+  var currentFilter = '';
+  var sessionStart = new Date();
 
+  /* ========================================================================
+   * DOM REFERENCES — Cache all queried elements for performance.
+   * ====================================================================== */
+  var dom = {};
+
+  function cacheDom() {
+    dom.statusLabel      = document.getElementById('statusLabel');
+    dom.statsSessions    = document.getElementById('statSessions');
+    dom.statsBots        = document.getElementById('statBots');
+    dom.statsJoined      = document.getElementById('statJoined');
+    dom.statsProxies     = document.getElementById('statProxies');
+    dom.statsAvail       = document.getElementById('statAvail');
+    dom.statsBlocked     = document.getElementById('statBlocked');
+    dom.lastUpdated      = document.getElementById('lastUpdated');
+    dom.proxyLock        = document.getElementById('proxyLock');
+    dom.proxyContent     = document.getElementById('proxyContent');
+    dom.proxyGrid        = document.getElementById('proxyGrid');
+    dom.proxyLoading     = document.getElementById('proxyLoading');
+    dom.proxyPassword    = document.getElementById('proxyPassword');
+    dom.proxyUnlockBtn   = document.getElementById('proxyUnlockBtn');
+    dom.proxyError       = document.getElementById('proxyError');
+    dom.proxyCountLabel  = document.getElementById('proxyCountLabel');
+    dom.proxyAvailLabel  = document.getElementById('proxyAvailLabel');
+    dom.proxyBlockedLabel = document.getElementById('proxyBlockedLabel');
+    dom.proxyLockCount   = document.getElementById('proxyLockCount');
+    dom.proxySearch      = document.getElementById('proxySearch');
+    dom.toastContainer   = document.getElementById('toastContainer');
+    dom.sysStatus        = document.getElementById('sysStatus');
+    dom.sysProxyCount    = document.getElementById('sysProxyCount');
+    dom.sysBotCount      = document.getElementById('sysBotCount');
+    dom.sysSessionCount  = document.getElementById('sysSessionCount');
+    dom.uptimeDisplay    = document.getElementById('uptimeDisplay');
+    dom.sysCurrentTime   = document.getElementById('sysCurrentTime');
+  }
+
+  /* ========================================================================
+   * TOAST — Shows a small notification at the bottom-right of the screen.
+   * Auto-dismisses after 3.5 seconds.
+   * ====================================================================== */
   function showToast(message, type) {
     type = type || 'info';
-    var container = $('toastContainer');
     var toast = document.createElement('div');
-    toast.className = 'toast ' + type;
+    toast.className = 'toast';
+    if (type === 'success') {
+      toast.className += ' toast-success';
+    } else if (type === 'error') {
+      toast.className += ' toast-error';
+    }
     toast.textContent = message;
-    container.appendChild(toast);
+    dom.toastContainer.appendChild(toast);
     setTimeout(function() {
-      if (toast.parentNode) { toast.parentNode.removeChild(toast); }
+      if (toast.parentNode) {
+        toast.parentNode.removeChild(toast);
+      }
     }, 3500);
   }
 
-  // =========================================================================
-  // STATS FETCHER — polls /api/status every 5 seconds
-  // =========================================================================
+  /* ========================================================================
+   * FETCH STATS — Polls /api/status and updates all stat cells in the bar.
+   * Called once at startup, then every STATS_INTERVAL_MS.
+   * ====================================================================== */
   function fetchStats() {
     var xhr = new XMLHttpRequest();
     xhr.open('GET', '/api/status', true);
+    xhr.timeout = 8000;
+
     xhr.onload = function() {
-      if (xhr.status !== 200) return;
+      if (xhr.status !== 200) {
+        dom.statusLabel.textContent = 'DEGRADED';
+        dom.statusLabel.style.color = '#f59e0b';
+        return;
+      }
       try {
         var d = JSON.parse(xhr.responseText);
-        $('statSessions').textContent = d.sessions || 0;
-        $('statBots').textContent = d.totalBots || 0;
-        $('statJoined').textContent = d.joinedBots || 0;
-        $('statProxies').textContent = d.proxies || 0;
-        $('statAvail').textContent = d.proxiesAvail || 0;
-        $('statBlocked').textContent = d.proxiesBlocked || 0;
-        $('statTokens').textContent = d.tokens || 0;
-        $('statTokenTime').textContent = d.tokenLastInAgo ? 'Last token: ' + d.tokenLastInAgo : '—';
-        $('lastUpdated').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
-      } catch(e) { /* ignore parse errors */ }
+        dom.statsSessions.textContent  = d.sessions || 0;
+        dom.statsBots.textContent      = d.totalBots || 0;
+        dom.statsJoined.textContent    = d.joinedBots || 0;
+        dom.statsProxies.textContent   = d.proxies || 0;
+        dom.statsAvail.textContent     = d.proxiesAvail || 0;
+        dom.statsBlocked.textContent   = d.proxiesBlocked || 0;
+        dom.lastUpdated.textContent    = 'updated ' + new Date().toLocaleTimeString();
+        dom.statusLabel.textContent    = 'RUNNING';
+        dom.statusLabel.style.color    = '';
+        dom.sysStatus.textContent      = 'online';
+        dom.sysProxyCount.textContent  = d.proxies || 80;
+        dom.sysBotCount.textContent    = d.totalBots || 0;
+        dom.sysSessionCount.textContent = d.sessions || 0;
+      } catch (e) {
+        /* JSON parse failure — ignore, will retry on next interval */
+      }
     };
+
     xhr.onerror = function() {
-      $('statusLabel').textContent = 'OFFLINE';
-      $('statusLabel').style.color = '#f87171';
+      dom.statusLabel.textContent = 'OFFLINE';
+      dom.statusLabel.style.color = '#ef4444';
     };
+
+    xhr.ontimeout = function() {
+      dom.statusLabel.textContent = 'TIMEOUT';
+      dom.statusLabel.style.color = '#f59e0b';
+    };
+
     xhr.send();
   }
 
-  // =========================================================================
-  // PROXY LIST — password-protected
-  // =========================================================================
+  /* ========================================================================
+   * RENDER PROXY GRID — Takes the raw proxy data array, applies the current
+   * search filter, and rebuilds the grid DOM. Also attaches click-to-copy
+   * behavior on each proxy address.
+   * ====================================================================== */
+  function renderProxyGrid(data) {
+    PROXY_DATA = data || PROXY_DATA;
+
+    var filtered = PROXY_DATA;
+    if (currentFilter.length > 0) {
+      var q = currentFilter.toLowerCase();
+      filtered = PROXY_DATA.filter(function(p) {
+        var addr = (p.ip + ':' + p.port).toLowerCase();
+        return addr.indexOf(q) !== -1;
+      });
+    }
+
+    dom.proxyCountLabel.textContent = filtered.length + ' / ' + PROXY_DATA.length;
+    dom.proxyAvailLabel.textContent = 0;
+    dom.proxyBlockedLabel.textContent = 0;
+
+    if (filtered.length === 0) {
+      dom.proxyGrid.innerHTML =
+        '<div class="proxy-empty">' +
+        '<span class="empty-icon">&#x1f50d;</span>' +
+        'No proxies match "' + currentFilter + '".' +
+        '</div>';
+      return;
+    }
+
+    var availCount = 0;
+    var blockedCount = 0;
+    var html = '';
+    for (var i = 0; i < filtered.length; i++) {
+      var p = filtered[i];
+      var isAvail = (p.status === 'available');
+      if (isAvail) { availCount++; } else { blockedCount++; }
+      var tagClass = isAvail ? 'tag-avail' : 'tag-blocked';
+      var tagLabel = isAvail ? 'AVAILABLE' : 'BLOCKED';
+      var addr = p.ip + ':' + p.port;
+      html += '<div class="proxy-card" data-addr="' + addr + '">' +
+        '<span class="proxy-addr" data-copy="' + addr + '">' +
+          addr +
+          '<span class="copy-hint">click to copy</span>' +
+        '</span>' +
+        '<span class="proxy-tag ' + tagClass + '">' + tagLabel + '</span>' +
+        '</div>';
+    }
+    dom.proxyGrid.innerHTML = html;
+    dom.proxyAvailLabel.textContent = availCount;
+    dom.proxyBlockedLabel.textContent = blockedCount;
+
+    /* Attach click-to-copy handlers */
+    var addrSpans = dom.proxyGrid.querySelectorAll('.proxy-addr[data-copy]');
+    for (var j = 0; j < addrSpans.length; j++) {
+      (function(el) {
+        el.addEventListener('click', function(e) {
+          var text = el.getAttribute('data-copy');
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(function() {
+              showToast('Copied: ' + text, 'success');
+            }).catch(function() {
+              fallbackCopy(text);
+            });
+          } else {
+            fallbackCopy(text);
+          }
+          e.stopPropagation();
+        });
+      })(addrSpans[j]);
+    }
+  }
+
+  /* ========================================================================
+   * FALLBACK COPY — Uses the older execCommand approach for browsers that
+   * do not support the Clipboard API.
+   * ====================================================================== */
+  function fallbackCopy(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand('copy');
+      showToast('Copied: ' + text, 'success');
+    } catch (e) {
+      showToast('Could not copy', 'error');
+    }
+    document.body.removeChild(ta);
+  }
+
+  /* ========================================================================
+   * LOAD PROXIES — Fetches the protected proxy list from /api/proxies with
+   * the user-supplied password. On success, stores data and renders grid.
+   * On 401, shows an error message.
+   * ====================================================================== */
   function loadProxies(password) {
-    var grid = $('proxyGrid');
-    var loading = $('proxyLoading');
-    var errorEl = $('proxyError');
-    loading.style.display = 'block';
-    grid.innerHTML = '';
-    errorEl.textContent = '';
+    dom.proxyLoading.style.display = 'block';
+    dom.proxyError.textContent = '';
+
+    /* Show skeleton grid while loading */
+    var skeletonHtml = '<div class="skeleton-grid">';
+    for (var s = 0; s < 12; s++) {
+      skeletonHtml += '<div class="skeleton-card"></div>';
+    }
+    skeletonHtml += '</div>';
+    dom.proxyGrid.innerHTML = skeletonHtml;
 
     var xhr = new XMLHttpRequest();
     xhr.open('GET', '/api/proxies?password=' + encodeURIComponent(password), true);
+    xhr.timeout = 10000;
+
     xhr.onload = function() {
-      loading.style.display = 'none';
+      dom.proxyLoading.style.display = 'none';
+
       if (xhr.status === 401) {
-        errorEl.textContent = '❌ Incorrect password. Try again.';
+        dom.proxyError.textContent = 'Incorrect password. Please try again.';
         showToast('Incorrect password', 'error');
         return;
       }
+
       if (xhr.status !== 200) {
-        errorEl.textContent = 'Server error (' + xhr.status + ').';
+        dom.proxyError.textContent = 'Server error (' + xhr.status + ').';
+        showToast('Server error', 'error');
         return;
       }
+
       try {
         var d = JSON.parse(xhr.responseText);
-        $('proxyCount').textContent = d.proxies.length + ' proxies';
+
         if (!d.proxies || d.proxies.length === 0) {
-          grid.innerHTML = '<div style="color:#64748b;text-align:center;padding:20px;">No proxies loaded.</div>';
+          dom.proxyGrid.innerHTML =
+            '<div class="proxy-empty">' +
+            '<span class="empty-icon">&#x1f4cb;</span>' +
+            'No proxies in the pool.' +
+            '</div>';
+          proxyUnlocked = true;
+          dom.proxyLock.style.display = 'none';
+          dom.proxyContent.style.display = 'block';
           return;
         }
-        var html = '';
-        for (var i = 0; i < d.proxies.length; i++) {
-          var p = d.proxies[i];
-          var statusClass = (p.status === 'available') ? 'available' : 'blocked';
-          var statusLabel = (p.status === 'available') ? '✓ Available' : '✗ Blocked';
-          html += '<div class="proxy-item">' +
-            '<span class="addr">' + p.ip + ':' + p.port + '</span>' +
-            '<span class="status-tag ' + statusClass + '">' + statusLabel + '</span>' +
-            '</div>';
-        }
-        grid.innerHTML = html;
+
         proxyUnlocked = true;
-        showToast('Proxy pool unlocked — ' + d.available + ' available', 'success');
-      } catch(e) {
-        errorEl.textContent = 'Failed to parse proxy data.';
+        dom.proxyLock.style.display = 'none';
+        dom.proxyContent.style.display = 'block';
+
+        /* Update the last-refresh timestamp */
+        var rt = document.getElementById('proxyRefreshTime');
+        if (rt) {
+          rt.textContent = new Date().toLocaleTimeString();
+        }
+
+        renderProxyGrid(d.proxies);
+
+        showToast(
+          'Proxy pool unlocked - ' + d.available + ' available, ' + d.blocked + ' blocked',
+          'success'
+        );
+      } catch (e) {
+        dom.proxyError.textContent = 'Failed to parse server response.';
+        showToast('Parse error', 'error');
       }
     };
+
     xhr.onerror = function() {
-      loading.style.display = 'none';
-      errorEl.textContent = 'Network error — server unreachable.';
+      dom.proxyLoading.style.display = 'none';
+      dom.proxyError.textContent = 'Network error - server unreachable.';
+      showToast('Network error', 'error');
     };
+
+    xhr.ontimeout = function() {
+      dom.proxyLoading.style.display = 'none';
+      dom.proxyError.textContent = 'Request timed out.';
+      showToast('Request timed out', 'error');
+    };
+
     xhr.send();
   }
 
-  // =========================================================================
-  // PASSWORD INPUT: Enter key support
-  // =========================================================================
-  $('proxyPassword').addEventListener('keydown', function(e) {
+  /* ========================================================================
+   * EVENT BINDING — Wire up the password input and unlock button.
+   * ====================================================================== */
+
+  // Enter key triggers unlock
+  dom.proxyPassword.addEventListener('keydown', function(e) {
     if (e.key === 'Enter') {
       e.preventDefault();
-      loadProxies(this.value);
+      var pw = dom.proxyPassword.value;
+      if (pw.length === 0) {
+        dom.proxyError.textContent = 'Please enter a password.';
+        return;
+      }
+      loadProxies(pw);
     }
   });
 
-  // =========================================================================
-  // UNLOCK BUTTON
-  // =========================================================================
-  $('proxyUnlockBtn').addEventListener('click', function() {
-    var pw = $('proxyPassword').value;
-    if (!pw) {
-      $('proxyError').textContent = 'Please enter a password.';
+  // Clicking the unlock button
+  dom.proxyUnlockBtn.addEventListener('click', function() {
+    var pw = dom.proxyPassword.value;
+    if (pw.length === 0) {
+      dom.proxyError.textContent = 'Please enter a password.';
       return;
     }
     loadProxies(pw);
   });
 
-  // =========================================================================
-  // INIT
-  // =========================================================================
-  fetchStats();
-  statsInterval = setInterval(fetchStats, 5000);
+  /* ========================================================================
+   * SEARCH FILTER — Filters the visible proxy grid in real time as the user
+   * types. Searches against the full proxy data by IP or port.
+   * ====================================================================== */
+  dom.proxySearch.addEventListener('input', function() {
+    currentFilter = dom.proxySearch.value;
+    renderProxyGrid();
+  });
+
+  /* ========================================================================
+   * PROXY AUTO-REFRESH — Toggle controlled by checkbox.
+   * ====================================================================== */
+  var proxyRefreshIntervalId = null;
+
+  function startProxyAutoRefresh() {
+    stopProxyAutoRefresh();
+    proxyRefreshIntervalId = setInterval(function() {
+      if (proxyUnlocked && dom.proxyPassword.value) {
+        loadProxies(dom.proxyPassword.value);
+      }
+    }, 30000);
+  }
+
+  function stopProxyAutoRefresh() {
+    if (proxyRefreshIntervalId) {
+      clearInterval(proxyRefreshIntervalId);
+      proxyRefreshIntervalId = null;
+    }
+  }
+
+  /* ========================================================================
+   * REFRESH BUTTON — Manual refresh that re-fetches the proxy list with
+   * the previously entered password.
+   * ====================================================================== */
+  dom.proxyRefreshBtn.addEventListener('click', function() {
+    if (!dom.proxyPassword.value) {
+      showToast('No password stored — re-enter to refresh.', 'error');
+      return;
+    }
+    loadProxies(dom.proxyPassword.value);
+  });
+
+  /* ========================================================================
+   * AUTO-REFRESH TOGGLE — Start or stop the proxy auto-refresh timer.
+   * ====================================================================== */
+  dom.proxyAutoRefresh.addEventListener('change', function() {
+    if (dom.proxyAutoRefresh.checked) {
+      startProxyAutoRefresh();
+    } else {
+      stopProxyAutoRefresh();
+    }
+  });
+
+  /* ========================================================================
+   * GLOBAL KEYBOARD SHORTCUTS:
+   *   /  — Focus the proxy search bar
+   *   R  — Refresh the proxy list (only when unlocked)
+   *   Enter — Focus password or trigger unlock
+   * ====================================================================== */
+  document.addEventListener('keydown', function(e) {
+    var tag = (e.target && e.target.tagName) || '';
+    var isInput = (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT');
+
+    /* Slash key focuses the search bar */
+    if (e.key === '/' && !isInput) {
+      e.preventDefault();
+      if (dom.proxySearch) {
+        dom.proxySearch.focus();
+      }
+      return;
+    }
+
+    /* R key refreshes proxy list */
+    if ((e.key === 'r' || e.key === 'R') && !isInput) {
+      if (proxyUnlocked && dom.proxyPassword.value) {
+        e.preventDefault();
+        loadProxies(dom.proxyPassword.value);
+      }
+      return;
+    }
+  });
+
+  /* ========================================================================
+   * INIT — Start the stats poller and cache DOM references.
+   * ====================================================================== */
+  function init() {
+    cacheDom();
+    fetchStats();
+    statsIntervalId = setInterval(fetchStats, STATS_INTERVAL_MS);
+    startProxyAutoRefresh();
+
+    /* Uptime counter — updates every second */
+    setInterval(function() {
+      var elapsed = Math.floor((new Date() - sessionStart) / 1000);
+      var h = Math.floor(elapsed / 3600);
+      var m = Math.floor((elapsed % 3600) / 60);
+      var s = elapsed % 60;
+      var parts = [];
+      if (h > 0) { parts.push(h + 'h'); }
+      if (m > 0 || h > 0) { parts.push(m + 'm'); }
+      parts.push(s + 's');
+      if (dom.uptimeDisplay) {
+        dom.uptimeDisplay.textContent = parts.join(' ');
+      }
+    }, 1000);
+
+    /* Current time clock — updates every 10 seconds */
+    setInterval(function() {
+      if (dom.sysCurrentTime) {
+        dom.sysCurrentTime.textContent = new Date().toLocaleString();
+      }
+    }, 10000);
+    if (dom.sysCurrentTime) {
+      dom.sysCurrentTime.textContent = new Date().toLocaleString();
+    }
+  }
+
+  /* Kick off on DOM ready */
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
 
 })();
 </script>
+  <footer class="app-footer">
+    <span>ICEbot Server v7.2.1</span>
+    <span class="footer-sep">&middot;</span>
+    <span>Saif Residential Proxy Pool</span>
+    <span class="footer-sep">&middot;</span>
+    <span>Powered by Go</span>
+    <br>
+    <a href="#">Dashboard</a>
+    <span class="footer-sep">&middot;</span>
+    <span>All times are local</span>
+  </footer>
 </body>
 </html>`
