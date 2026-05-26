@@ -1577,10 +1577,7 @@ var dashboardHTML = `<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- =======================================================================
-       PASSWORD GATE + PROXY GRID — Proxy list is locked behind a password.
-       The password is "saif1234". Enter it to unlock the full proxy pool.
-       ====================================================================== -->
+  <!-- PASSWORD GATE + PROXY GRID — Locked behind password. -->
   <div class="section">
     <div class="section-body" id="proxySectionBody">
 
