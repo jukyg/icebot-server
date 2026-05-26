@@ -10,8 +10,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -90,45 +88,25 @@ type ProxySelection struct {
 // ============================================================================
 var residentialProxies []ResidentialProxy
 
-// proxySeeds are the base proxy entries that get expanded to 80 total at init.
+// proxySeeds are the known working residential proxies with credentials.
 var proxySeeds = []ResidentialProxy{
-	{IP: "23.95.150.145", Port: "6114", Username: "hwbfwywz", Password: "9hywasuc53a0"},
-	{IP: "38.154.203.95", Port: "5863", Username: "hwbfwywz", Password: "9hywasuc53a0"},
-	{IP: "198.105.121.200", Port: "6462", Username: "hwbfwywz", Password: "9hywasuc53a0"},
-	{IP: "64.137.96.74", Port: "6641", Username: "hwbfwywz", Password: "9hywasuc53a0"},
-	{IP: "198.23.243.226", Port: "6361", Username: "hwbfwywz", Password: "9hywasuc53a0"},
-	{IP: "209.127.138.10", Port: "5784", Username: "hwbfwywz", Password: "9hywasuc53a0"},
-	{IP: "84.247.60.125", Port: "6095", Username: "hwbfwywz", Password: "9hywasuc53a0"},
+	{IP: "38.154.203.95", Port: "5863", Username: "zmvhoipo", Password: "jf1azmanzauy"},
+	{IP: "198.105.121.200", Port: "6462", Username: "zmvhoipo", Password: "jf1azmanzauy"},
+	{IP: "64.137.96.74", Port: "6641", Username: "zmvhoipo", Password: "jf1azmanzauy"},
+	{IP: "209.127.138.10", Port: "5784", Username: "zmvhoipo", Password: "jf1azmanzauy"},
+	{IP: "38.154.185.97", Port: "6370", Username: "zmvhoipo", Password: "jf1azmanzauy"},
+	{IP: "84.247.60.125", Port: "6095", Username: "zmvhoipo", Password: "jf1azmanzauy"},
+	{IP: "142.111.67.146", Port: "5611", Username: "zmvhoipo", Password: "jf1azmanzauy"},
+	{IP: "191.96.254.138", Port: "6185", Username: "zmvhoipo", Password: "jf1azmanzauy"},
+	{IP: "31.58.9.4", Port: "6077", Username: "zmvhoipo", Password: "jf1azmanzauy"},
+	{IP: "64.137.10.153", Port: "5803", Username: "zmvhoipo", Password: "jf1azmanzauy"},
 }
 
 func init() {
-	// Expand the proxy pool to exactly 80 entries by varying the last IP octet
-	// of each seed proxy. This gives bots a wider range of outbound IPs while
-	// keeping credentials consistent. Non-working IPs are handled gracefully
-	// by the failure detection and retry logic.
-	residentialProxies = make([]ResidentialProxy, 0, 80)
-	target := 80
-	for i := 0; len(residentialProxies) < target; i++ {
-		seed := proxySeeds[i%len(proxySeeds)]
-		parts := strings.Split(seed.IP, ".")
-		if len(parts) != 4 {
-			residentialProxies = append(residentialProxies, seed)
-			continue
-		}
-		base, _ := strconv.Atoi(parts[3])
-		offset := (i / len(proxySeeds)) * 13
-		newLast := (base + offset + i%11) % 256
-		if newLast == 0 {
-			newLast = 1
-		}
-		parts[3] = strconv.Itoa(newLast)
-		residentialProxies = append(residentialProxies, ResidentialProxy{
-			IP:       strings.Join(parts, "."),
-			Port:     seed.Port,
-			Username: seed.Username,
-			Password: seed.Password,
-		})
-	}
+	// Use the known working proxies directly — no IP fuzzing.
+	// These are actual proxy servers with valid credentials.
+	residentialProxies = make([]ResidentialProxy, len(proxySeeds))
+	copy(residentialProxies, proxySeeds)
 }
 
 // blockedProxies tracks proxies that have failed recently.

@@ -1668,7 +1668,7 @@ kbd{
       <div class="lock-title type-cursor">Proxy Pool Locked</div>
       <div class="lock-desc">
         Authentication required to view
-        <strong id="proxyLockCount">80</strong>
+        <strong id="proxyLockCount">10</strong>
         residential proxies with live status.
         Max <strong>5</strong> attempts before 60s lockout.
       </div>
@@ -1821,7 +1821,7 @@ kbd{
       </div>
       <div class="sys-item">
         <span class="sys-key">Pool Size</span>
-        <span class="sys-val" id="sysPool">80</span>
+        <span class="sys-val" id="sysPool">10</span>
       </div>
       <div class="sys-item">
         <span class="sys-key">Bots</span>
