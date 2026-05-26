@@ -1719,29 +1719,6 @@ var dashboardHTML = `<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- =======================================================================
-       API REFERENCE — Quick links to REST endpoints for advanced users.
-       ====================================================================== -->
-  <div class="section" style="margin-top: 20px;">
-    <div class="section-body">
-      <div class="api-strip">
-        <a href="/api/status" target="_blank">
-          <span class="method">GET</span> /api/status
-        </a>
-        <a href="/api/turnstile-status" target="_blank">
-          <span class="method">GET</span> /api/turnstile-status
-        </a>
-        <a href="/api/proxy-status" target="_blank">
-          <span class="method">GET</span> /api/proxy-status
-        </a>
-        <span title="Protected — requires ?password=saif1234">
-          <span class="method method-muted">GET</span> /api/proxies
-          <span style="color:var(--text-muted);font-size:0.65rem;">(auth)</span>
-        </span>
-      </div>
-    </div>
-  </div>
-
   <!-- Keyboard shortcut hint -->
   <div class="kbd-hint">
     Press <kbd>Enter</kbd> to unlock &middot;
