@@ -548,19 +548,17 @@ body.cursor-hover #cursor-ring{width:48px;height:48px;border-color:rgba(29,233,1
 
 /* Logo mark */
 .logo-mark{
-  width:40px;height:40px;flex-shrink:0;
-  border:1px solid var(--border-2);
-  border-radius:var(--r-sm);
-  background:linear-gradient(135deg,rgba(0,229,255,0.08),rgba(0,0,0,0));
+  width:52px;height:52px;flex-shrink:0;
   display:flex;align-items:center;justify-content:center;
-  box-shadow:var(--shadow-cyan);
-  position:relative;overflow:hidden;
+  position:relative;
 }
 .logo-mark::after{
-  content:'';position:absolute;inset:0;
-  background:linear-gradient(135deg,transparent 40%,rgba(0,229,255,0.08));
+  content:'';position:absolute;inset:-4px;
+  border-radius:14px;
+  background:linear-gradient(135deg,rgba(212,175,55,0.15),transparent 50%,rgba(212,175,55,0.05));
+  z-index:-1;
 }
-.logo-mark svg{position:relative;z-index:1}
+.logo-mark svg{position:relative;z-index:1;filter:drop-shadow(0 0 8px rgba(212,175,55,0.2))}
 
 .brand-name{
   font-size:1.3rem;font-weight:700;
@@ -1298,7 +1296,7 @@ kbd{
 .footer .sig{
   font-family:'Georgia',serif;
   font-style:italic;text-transform:none;
-  color:rgba(255,215,64,0.4);letter-spacing:0.05em;
+  color:#d4af37;letter-spacing:0.05em;
 }
 
 /* ============================================================
@@ -1431,10 +1429,12 @@ kbd{
   <div class="header-inner">
     <div style="display:flex;align-items:center;gap:14px">
       <div class="logo-mark">
-        <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
-          <polygon points="11,2 20,7 20,15 11,20 2,15 2,7" stroke="#00e5ff" stroke-width="1.2" fill="rgba(0,229,255,0.06)"/>
-          <polygon points="11,6 16,9 16,14 11,17 6,14 6,9" stroke="#1de9b6" stroke-width="0.8" fill="rgba(29,233,182,0.04)"/>
-          <circle cx="11" cy="11" r="2" fill="#00e5ff" opacity="0.8"/>
+        <svg width="44" height="44" viewBox="0 0 44 44" fill="none">
+          <rect x="2" y="2" width="40" height="40" rx="10" fill="#0a0a0a" stroke="#ffd740" stroke-width="1.5"/>
+          <rect x="6" y="6" width="32" height="32" rx="6" fill="#111" stroke="rgba(255,215,64,0.3)" stroke-width="0.5"/>
+          <text x="22" y="27" text-anchor="middle" fill="#ffd740" font-family="Georgia,serif" font-size="15" font-weight="700" font-style="italic">Saif</text>
+          <circle cx="37" cy="7" r="2.5" fill="#ffd740" opacity="0.6"/>
+          <circle cx="7" cy="37" r="2.5" fill="#ffd740" opacity="0.6"/>
         </svg>
       </div>
       <div>
