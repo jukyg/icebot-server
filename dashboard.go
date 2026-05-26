@@ -810,15 +810,60 @@ var dashboardHTML = `<!DOCTYPE html>
     border-radius: var(--radius-sm);
     padding: 7px 14px;
     font-size: 0.75rem;
-    color: var(--text-secondary);
+    color: var(--accent-2);
+    font-weight: 500;
     transition: all var(--transition);
     font-family: var(--font-mono);
   }
-
   .api-strip a:hover {
-    background: rgba(108, 99, 255, 0.1);
+    color: #fff;
     border-color: var(--accent-1);
-    color: var(--accent-2);
+    background: rgba(108, 99, 255, 0.18);
+    box-shadow: 0 0 12px rgba(108, 99, 255, 0.15);
+  }
+
+  /* ==========================================================================
+   * PROXY LINKS — API links displayed inside the unlocked proxy box.
+   * ====================================================================== */
+  .proxy-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    justify-content: center;
+    padding: 18px 0 14px;
+    margin-bottom: 10px;
+    border-bottom: 1px solid var(--border-color);
+  }
+  .proxy-links a {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(108, 99, 255, 0.09);
+    border: 1px solid rgba(108, 99, 255, 0.2);
+    border-radius: var(--radius-sm);
+    padding: 9px 18px;
+    font-size: 0.78rem;
+    color: #c4b5fd;
+    font-weight: 500;
+    transition: all 0.2s;
+    text-decoration: none;
+    font-family: var(--font-mono);
+    letter-spacing: 0.2px;
+  }
+  .proxy-links a:hover {
+    color: #fff;
+    background: rgba(108, 99, 255, 0.25);
+    border-color: var(--accent-1);
+    box-shadow: 0 0 20px rgba(108, 99, 255, 0.25);
+    transform: translateY(-1px);
+  }
+  .proxy-links .method-tag {
+    font-size: 0.6rem;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 3px;
+    background: rgba(34, 197, 94, 0.15);
+    color: var(--green);
   }
 
   .api-strip .method {
@@ -1597,6 +1642,17 @@ var dashboardHTML = `<!DOCTYPE html>
             <span>Auto</span>
           </label>
         </div>
+        <div class="proxy-links">
+          <a href="/api/status" target="_blank">
+            <span class="method-tag">GET</span> /api/status
+          </a>
+          <a href="/api/turnstile-status" target="_blank">
+            <span class="method-tag">GET</span> /api/turnstile-status
+          </a>
+          <a href="/api/proxy-status" target="_blank">
+            <span class="method-tag">GET</span> /api/proxy-status
+          </a>
+        </div>
         <div class="proxy-grid" id="proxyGrid"></div>
         <div id="proxyLoading" style="display:none; text-align:center; padding:24px; color:var(--text-muted); font-size:0.82rem;">
           Loading proxy pool...
@@ -2020,43 +2076,7 @@ var dashboardHTML = `<!DOCTYPE html>
   }
 
   /* ========================================================================
-   * EVENT BINDING — Wire up the password input and unlock button.
-   * ====================================================================== */
-
-  // Enter key triggers unlock
-  dom.proxyPassword.addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      var pw = dom.proxyPassword.value;
-      if (pw.length === 0) {
-        dom.proxyError.textContent = 'Please enter a password.';
-        return;
-      }
-      loadProxies(pw);
-    }
-  });
-
-  // Clicking the unlock button
-  dom.proxyUnlockBtn.addEventListener('click', function() {
-    var pw = dom.proxyPassword.value;
-    if (pw.length === 0) {
-      dom.proxyError.textContent = 'Please enter a password.';
-      return;
-    }
-    loadProxies(pw);
-  });
-
-  /* ========================================================================
-   * SEARCH FILTER — Filters the visible proxy grid in real time as the user
-   * types. Searches against the full proxy data by IP or port.
-   * ====================================================================== */
-  dom.proxySearch.addEventListener('input', function() {
-    currentFilter = dom.proxySearch.value;
-    renderProxyGrid();
-  });
-
-  /* ========================================================================
-   * PROXY AUTO-REFRESH — Toggle controlled by checkbox.
+   * PROXY AUTO-REFRESH helpers
    * ====================================================================== */
   var proxyRefreshIntervalId = null;
 
@@ -2077,62 +2097,99 @@ var dashboardHTML = `<!DOCTYPE html>
   }
 
   /* ========================================================================
-   * REFRESH BUTTON — Manual refresh that re-fetches the proxy list with
-   * the previously entered password.
+   * BIND EVENTS — Attach all event listeners after cacheDom() has run.
+   * This must be called from init() AFTER cacheDom() so that the DOM
+   * element references in the [dom] object are populated.
    * ====================================================================== */
-  dom.proxyRefreshBtn.addEventListener('click', function() {
-    if (!dom.proxyPassword.value) {
-      showToast('No password stored — re-enter to refresh.', 'error');
-      return;
-    }
-    loadProxies(dom.proxyPassword.value);
-  });
+  function bindEvents() {
 
-  /* ========================================================================
-   * AUTO-REFRESH TOGGLE — Start or stop the proxy auto-refresh timer.
-   * ====================================================================== */
-  dom.proxyAutoRefresh.addEventListener('change', function() {
-    if (dom.proxyAutoRefresh.checked) {
-      startProxyAutoRefresh();
-    } else {
-      stopProxyAutoRefresh();
-    }
-  });
-
-  /* ========================================================================
-   * GLOBAL KEYBOARD SHORTCUTS:
-   *   /  — Focus the proxy search bar
-   *   R  — Refresh the proxy list (only when unlocked)
-   *   Enter — Focus password or trigger unlock
-   * ====================================================================== */
-  document.addEventListener('keydown', function(e) {
-    var tag = (e.target && e.target.tagName) || '';
-    var isInput = (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT');
-
-    /* Slash key focuses the search bar */
-    if (e.key === '/' && !isInput) {
-      e.preventDefault();
-      if (dom.proxySearch) {
-        dom.proxySearch.focus();
-      }
-      return;
-    }
-
-    /* R key refreshes proxy list */
-    if ((e.key === 'r' || e.key === 'R') && !isInput) {
-      if (proxyUnlocked && dom.proxyPassword.value) {
+    // Enter key triggers unlock
+    dom.proxyPassword.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') {
         e.preventDefault();
-        loadProxies(dom.proxyPassword.value);
+        var pw = dom.proxyPassword.value;
+        if (pw.length === 0) {
+          dom.proxyError.textContent = 'Please enter a password.';
+          return;
+        }
+        loadProxies(pw);
       }
-      return;
-    }
-  });
+    });
+
+    // Clicking the unlock button
+    dom.proxyUnlockBtn.addEventListener('click', function() {
+      var pw = dom.proxyPassword.value;
+      if (pw.length === 0) {
+        dom.proxyError.textContent = 'Please enter a password.';
+        return;
+      }
+      loadProxies(pw);
+    });
+
+    /* ========================================================================
+     * SEARCH FILTER — Filters the visible proxy grid in real time
+     * ====================================================================== */
+    dom.proxySearch.addEventListener('input', function() {
+      currentFilter = dom.proxySearch.value;
+      renderProxyGrid();
+    });
+
+    /* ========================================================================
+     * REFRESH BUTTON — Manual refresh
+     * ====================================================================== */
+    dom.proxyRefreshBtn.addEventListener('click', function() {
+      if (!dom.proxyPassword.value) {
+        showToast('No password stored — re-enter to refresh.', 'error');
+        return;
+      }
+      loadProxies(dom.proxyPassword.value);
+    });
+
+    /* ========================================================================
+     * AUTO-REFRESH TOGGLE
+     * ====================================================================== */
+    dom.proxyAutoRefresh.addEventListener('change', function() {
+      if (dom.proxyAutoRefresh.checked) {
+        startProxyAutoRefresh();
+      } else {
+        stopProxyAutoRefresh();
+      }
+    });
+
+    /* ========================================================================
+     * GLOBAL KEYBOARD SHORTCUTS:
+     *   /  — Focus the proxy search bar
+     *   R  — Refresh the proxy list (only when unlocked)
+     * ====================================================================== */
+    document.addEventListener('keydown', function(e) {
+      var tag = (e.target && e.target.tagName) || '';
+      var isInput = (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT');
+
+      if (e.key === '/' && !isInput) {
+        e.preventDefault();
+        if (dom.proxySearch) {
+          dom.proxySearch.focus();
+        }
+        return;
+      }
+
+      if ((e.key === 'r' || e.key === 'R') && !isInput) {
+        if (proxyUnlocked && dom.proxyPassword.value) {
+          e.preventDefault();
+          loadProxies(dom.proxyPassword.value);
+        }
+        return;
+      }
+    });
+
+  }
 
   /* ========================================================================
-   * INIT — Start the stats poller and cache DOM references.
+   * INIT — Start the stats poller, cache DOM refs, and bind events.
    * ====================================================================== */
   function init() {
     cacheDom();
+    bindEvents();
     fetchStats();
     statsIntervalId = setInterval(fetchStats, STATS_INTERVAL_MS);
     startProxyAutoRefresh();
