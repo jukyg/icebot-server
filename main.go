@@ -58,6 +58,9 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleStatus(w http.ResponseWriter, r *http.Request) {
+	if !requirePassword(w, r) {
+		return
+	}
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Content-Type", "application/json")
 
@@ -93,6 +96,9 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleProxyStatus(w http.ResponseWriter, r *http.Request) {
+	if !requirePassword(w, r) {
+		return
+	}
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Content-Type", "application/json")
 

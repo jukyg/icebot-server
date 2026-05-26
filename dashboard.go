@@ -16,8 +16,69 @@ import (
 // Password: saif1234 (required to unlock proxy list)
 // ============================================================================
 
-// dashboardPassword is the password required to view the proxy list.
+// dashboardPassword is the password required to view the proxy list
+// and protected API endpoints.
 const dashboardPassword = "saif1234"
+
+// apiPasswordFormHTML is a minimal HTML page shown when a protected API
+// endpoint is accessed without a valid password.
+const apiPasswordFormHTML = `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Protected</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#080a18;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center}
+.card{background:linear-gradient(145deg,#0f1228,#1a1e3a);border:1px solid rgba(108,99,255,.12);border-radius:16px;padding:40px 48px;text-align:center;max-width:400px;width:90%}
+.lock{margin-bottom:12px;opacity:.5}
+h1{font-size:1.3rem;font-weight:600;color:#c4b5fd;margin-bottom:8px}
+p{font-size:.85rem;color:rgba(148,163,184,.7);margin-bottom:24px;line-height:1.5}
+form{display:flex;flex-direction:column;gap:12px}
+input{background:rgba(8,10,24,.6);border:1px solid rgba(108,99,255,.15);border-radius:8px;padding:12px 16px;color:#e2e8f0;font-size:.9rem;outline:none;transition:border-color .2s}
+input:focus{border-color:rgba(108,99,255,.5)}
+button{background:linear-gradient(145deg,#6c63ff,#7c3aed);border:none;border-radius:8px;padding:12px;color:#fff;font-size:.9rem;font-weight:600;cursor:pointer;transition:opacity .2s}
+button:hover{opacity:.9}
+.error{color:#f87171;font-size:.8rem;margin-top:8px;min-height:1.2em}
+</style></head>
+<body>
+<div class="card">
+<div class="lock">&#x1f512;</div>
+<h1>Password Required</h1>
+<p>This API endpoint is protected. Enter the dashboard password to access it.</p>
+<form method="get">
+<input type="password" name="password" placeholder="Enter password" autocomplete="off" />
+<button type="submit">Unlock</button>
+<div class="error" id="pwError"></div>
+</form>
+</div>
+<script>
+(function(){var p=new URLSearchParams(location.search).get('password');if(p!==null){var e=document.getElementById('pwError');if(e)e.textContent='Incorrect password.'}})();
+</script>
+</body>
+</html>`
+
+// requirePassword checks the ?password= query parameter against the
+// dashboard password. If valid, it returns (true, "").
+// If invalid or missing, it writes the password form to w and returns
+// (false, ""). On a wrong password submission, it also writes the form
+// with an error message.
+func requirePassword(w http.ResponseWriter, r *http.Request) bool {
+	pw := r.URL.Query().Get("password")
+	if pw == "" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(apiPasswordFormHTML))
+		return false
+	}
+	if pw != dashboardPassword {
+		// Return the same form but with the password pre-filled and an error
+		html := apiPasswordFormHTML
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(html))
+		return false
+	}
+	return true
+}
 
 // ============================================================================
 // HTTP Handlers
@@ -253,6 +314,7 @@ var dashboardHTML = `<!DOCTYPE html>
 
   /* ==========================================================================
    * AMBIENT GLOW — Soft radial gradients fixed to the background for depth.
+   * Also includes a subtle grid pattern overlay.
    * ====================================================================== */
   .bg-glow-1 {
     position: fixed;
@@ -276,6 +338,25 @@ var dashboardHTML = `<!DOCTYPE html>
   }
   .bg-glow-3 {
     position: fixed;
+    top: 40%;
+    left: 50%;
+    width: 40%;
+    height: 40%;
+    transform: translate(-50%, -50%);
+    background: radial-gradient(ellipse, rgba(108, 99, 255, 0.03), transparent 70%);
+    pointer-events: none;
+    z-index: -1;
+  }
+  .bg-grid {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background-image:
+      linear-gradient(rgba(108, 99, 255, 0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(108, 99, 255, 0.03) 1px, transparent 1px);
+    background-size: 48px 48px;
+    pointer-events: none;
+    z-index: -1;
+  }
     top: 40%;
     left: 40%;
     width: 30%;
@@ -316,19 +397,21 @@ var dashboardHTML = `<!DOCTYPE html>
   }
 
   .header-emblem {
-    width: 42px;
-    height: 42px;
-    border-radius: 12px;
-    background: linear-gradient(145deg, var(--accent-1), var(--accent-3));
+    width: 46px;
+    height: 46px;
+    border-radius: 14px;
+    background: linear-gradient(145deg, rgba(108, 99, 255, 0.15), rgba(124, 58, 237, 0.08));
+    border: 1px solid rgba(108, 99, 255, 0.15);
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 1.1rem;
-    font-weight: 800;
-    color: #fff;
-    letter-spacing: 1px;
-    box-shadow: 0 0 24px rgba(108, 99, 255, 0.25);
+    box-shadow: 0 0 30px rgba(108, 99, 255, 0.12), inset 0 1px 0 rgba(255,255,255,0.05);
     flex-shrink: 0;
+    backdrop-filter: blur(4px);
+    transition: box-shadow 0.3s;
+  }
+  .header-emblem:hover {
+    box-shadow: 0 0 40px rgba(108, 99, 255, 0.25), inset 0 1px 0 rgba(255,255,255,0.05);
   }
 
   .header-title {
@@ -491,6 +574,18 @@ var dashboardHTML = `<!DOCTYPE html>
     font-size: 0.65rem;
     color: rgba(74, 80, 112, 0.7);
     margin-top: 3px;
+  }
+
+  .stat-icon {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 6px;
+    border-radius: 8px;
+    background: rgba(108, 99, 255, 0.08);
+    color: var(--accent-1);
   }
 
   /* ==========================================================================
@@ -694,11 +789,28 @@ var dashboardHTML = `<!DOCTYPE html>
     font-size: 0.8rem;
     font-family: var(--font-mono);
     transition: all var(--transition);
+    position: relative;
+    overflow: hidden;
+  }
+  .proxy-card::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    background: linear-gradient(180deg, transparent, var(--accent-1), transparent);
+    opacity: 0;
+    transition: opacity var(--transition);
+  }
+  .proxy-card:hover::before {
+    opacity: 0.6;
   }
 
   .proxy-card:hover {
     border-color: var(--border-hover);
     background: rgba(12, 15, 30, 0.8);
+    transform: translateX(3px);
   }
 
   .proxy-card .proxy-addr {
@@ -1516,6 +1628,7 @@ var dashboardHTML = `<!DOCTYPE html>
 <div class="bg-glow-1"></div>
 <div class="bg-glow-2"></div>
 <div class="bg-glow-3"></div>
+<div class="bg-grid"></div>
 
 <!-- ==========================================================================
      HEADER — Branding, server name, and live status badge
@@ -1523,7 +1636,18 @@ var dashboardHTML = `<!DOCTYPE html>
 <header class="header">
   <div class="header-inner">
     <div class="header-brand">
-      <div class="header-emblem">I</div>
+      <div class="header-emblem">
+        <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+          <rect x="2" y="2" width="28" height="28" rx="8" stroke="url(#lg)" stroke-width="1.5" fill="rgba(108,99,255,0.06)"/>
+          <path d="M10 20V8l12 6-12 6z" fill="url(#lg)" opacity="0.9"/>
+          <defs>
+            <linearGradient id="lg" x1="0" y1="0" x2="32" y2="32">
+              <stop stop-color="#6c63ff"/>
+              <stop offset="1" stop-color="#a78bfa"/>
+            </linearGradient>
+          </defs>
+        </svg>
+      </div>
       <div class="header-title">
         <div class="name">ICEbot Server</div>
         <div class="byline">
@@ -1555,23 +1679,47 @@ var dashboardHTML = `<!DOCTYPE html>
        ====================================================================== -->
   <div class="stats-bar" id="statsBar">
     <div class="stat-cell">
+      <div class="stat-icon">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+          <rect x="1" y="3" width="16" height="12" rx="2" stroke="currentColor" stroke-width="1.3"/>
+          <circle cx="9" cy="9" r="2.5" stroke="currentColor" stroke-width="1.3"/>
+          <path d="M9 11.5V14" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+        </svg>
+      </div>
       <div class="stat-value" id="statSessions">0</div>
-      <div class="stat-label">Active Sessions</div>
+      <div class="stat-label">Sessions</div>
     </div>
     <div class="stat-cell">
+      <div class="stat-icon">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+          <circle cx="9" cy="6" r="3" stroke="currentColor" stroke-width="1.3"/>
+          <path d="M3 16c0-3.3 2.7-6 6-6s6 2.7 6 6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+        </svg>
+      </div>
       <div class="stat-value" id="statBots">0</div>
-      <div class="stat-label">Total Bots</div>
+      <div class="stat-label">Bots</div>
     </div>
     <div class="stat-cell">
+      <div class="stat-icon">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+          <path d="M9 2L11 6.5L16 7L12.5 10.5L13.5 16L9 13L4.5 16L5.5 10.5L2 7L7 6.5L9 2Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+        </svg>
+      </div>
       <div class="stat-value stat-green" id="statJoined">0</div>
-      <div class="stat-label">Bots Joined</div>
+      <div class="stat-label">Joined</div>
     </div>
     <div class="stat-cell">
+      <div class="stat-icon">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+          <rect x="1" y="1" width="16" height="16" rx="3" stroke="currentColor" stroke-width="1.3"/>
+          <circle cx="9" cy="9" r="4" stroke="currentColor" stroke-width="1.3"/>
+          <circle cx="9" cy="9" r="1.5" fill="currentColor"/>
+        </svg>
+      </div>
       <div class="stat-value" id="statProxies">0</div>
-      <div class="stat-label">Proxies in Pool</div>
+      <div class="stat-label">Proxies</div>
       <div class="stat-sublabel">
-        <span id="statAvail">0</span> available
-        &middot;
+        <span id="statAvail">0</span> avail &middot;
         <span id="statBlocked">0</span> blocked
       </div>
     </div>
@@ -1640,13 +1788,13 @@ var dashboardHTML = `<!DOCTYPE html>
           </label>
         </div>
         <div class="proxy-links">
-          <a href="/api/status" target="_blank">
+          <a href="#" class="api-link" data-path="/api/status">
             <span class="method-tag">GET</span> /api/status
           </a>
-          <a href="/api/turnstile-status" target="_blank">
+          <a href="#" class="api-link" data-path="/api/turnstile-status">
             <span class="method-tag">GET</span> /api/turnstile-status
           </a>
-          <a href="/api/proxy-status" target="_blank">
+          <a href="#" class="api-link" data-path="/api/proxy-status">
             <span class="method-tag">GET</span> /api/proxy-status
           </a>
         </div>
@@ -2129,6 +2277,22 @@ var dashboardHTML = `<!DOCTYPE html>
         stopProxyAutoRefresh();
       }
     });
+
+    /* ========================================================================
+     * API LINK HANDLER — Opens protected endpoints with the stored password.
+     * ====================================================================== */
+    var apiLinks = document.querySelectorAll('.api-link');
+    for (var li = 0; li < apiLinks.length; li++) {
+      (function(link) {
+        link.addEventListener('click', function(e) {
+          e.preventDefault();
+          var pw = dom.proxyPassword.value;
+          var path = link.getAttribute('data-path');
+          var url = path + '?password=' + encodeURIComponent(pw);
+          window.open(url, '_blank');
+        });
+      })(apiLinks[li]);
+    }
 
     /* ========================================================================
      * GLOBAL KEYBOARD SHORTCUTS:

@@ -232,6 +232,9 @@ func handleTurnstileToken(w http.ResponseWriter, r *http.Request) {
 
 // handleTurnstileStatus returns the current token pool status as JSON.
 func handleTurnstileStatus(w http.ResponseWriter, r *http.Request) {
+	if !requirePassword(w, r) {
+		return
+	}
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	avail, lastIn := TurnstilePoolStatus()
 	w.Header().Set("Content-Type", "application/json")
