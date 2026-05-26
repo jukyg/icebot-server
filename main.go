@@ -28,59 +28,8 @@ var upgrader = websocket.Upgrader{
 func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Check if this is a WebSocket upgrade request
 	if r.Header.Get("Upgrade") == "" {
-		// Regular HTTP request (browser visit) — show status page
-		w.Header().Set("Content-Type", "text/html")
-		w.WriteHeader(http.StatusOK)
-		proxyTotal, proxyAvail, proxyBlocked := ProxyStats()
-		tokenAvail, _ := TurnstilePoolStatus()
-		fmt.Fprintf(w, `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>ICEbot Server v7</title>
-<style>
-  *{margin:0;padding:0;box-sizing:border-box}
-  body{background:#0a0a1a;color:#e2e8f0;font-family:'Segoe UI',system-ui,sans-serif;padding:40px;min-height:100vh}
-  .container{max-width:700px;margin:0 auto}
-  h1{font-size:2.2rem;background:linear-gradient(135deg,#38bdf8,#818cf8,#c084fc);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:8px}
-  .subtitle{color:#64748b;font-size:0.95rem;margin-bottom:32px}
-  .card{background:rgba(30,41,59,0.7);border:1px solid rgba(56,189,248,0.15);border-radius:16px;padding:24px;margin-bottom:16px;backdrop-filter:blur(10px)}
-  .card h2{color:#38bdf8;font-size:1.1rem;margin-bottom:16px;display:flex;align-items:center;gap:8px}
-  .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px}
-  .stat{background:rgba(15,23,42,0.6);border-radius:10px;padding:14px;text-align:center}
-  .stat .value{font-size:1.8rem;font-weight:700;color:#38bdf8}
-  .stat .label{font-size:0.8rem;color:#64748b;margin-top:4px;text-transform:uppercase;letter-spacing:0.5px}
-  .status-badge{display:inline-flex;align-items:center;gap:6px;background:rgba(34,197,94,0.15);color:#22c55e;padding:4px 12px;border-radius:20px;font-size:0.85rem;font-weight:600}
-  .status-badge::before{content:'';width:8px;height:8px;background:#22c55e;border-radius:50%%;animation:pulse 2s infinite}
-  @keyframes pulse{0%%,100%%{opacity:1}50%%{opacity:0.4}}
-  .links{display:flex;gap:12px;margin-top:8px}
-  .links a{color:#818cf8;text-decoration:none;font-size:0.9rem;padding:6px 14px;border:1px solid rgba(129,140,248,0.3);border-radius:8px;transition:all 0.2s}
-  .links a:hover{background:rgba(129,140,248,0.1);border-color:#818cf8}
-  .proxy-list{font-size:0.8rem;color:#64748b;margin-top:12px;line-height:1.8}
-  .proxy-list span{background:rgba(56,189,248,0.1);color:#38bdf8;padding:2px 8px;border-radius:4px;margin:2px;display:inline-block}
-</style></head>
-<body><div class="container">
-  <h1>⚡ ICEbot Server v7</h1>
-  <p class="subtitle">Residential Proxy Edition — Go Backend</p>
-  <div class="card">
-    <h2><span class="status-badge">RUNNING</span></h2>
-    <div class="stat-grid">
-      <div class="stat"><div class="value">%d</div><div class="label">Proxies Total</div></div>
-      <div class="stat"><div class="value">%d</div><div class="label">Available</div></div>
-      <div class="stat"><div class="value">%d</div><div class="label">Blocked</div></div>
-      <div class="stat"><div class="value">%d</div><div class="label">Tokens</div></div>
-    </div>
-  </div>
-  <div class="card">
-    <h2>🔗 API Endpoints</h2>
-    <div class="links">
-      <a href="/api/status">📊 Status</a>
-      <a href="/api/turnstile-status">🔑 Tokens</a>
-      <a href="/api/proxy-status">🌐 Proxies</a>
-    </div>
-  </div>
-  <div class="card">
-    <h2>🌐 Proxy Pool</h2>
-    <div class="proxy-list">%s</div>
-  </div>
-</div></body></html>`, proxyTotal, proxyAvail, proxyBlocked, tokenAvail, renderProxyList())
+		// Regular HTTP request (browser visit) — show the modern dashboard
+		handleDashboard(w, r)
 		return
 	}
 
@@ -106,15 +55,6 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 		session.HandleMessage(raw)
 	}
-}
-
-// renderProxyList generates HTML spans for each proxy in the pool.
-func renderProxyList() string {
-	result := ""
-	for _, p := range residentialProxies {
-		result += fmt.Sprintf(`<span>%s:%s</span> `, p.IP, p.Port)
-	}
-	return result
 }
 
 func handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -217,6 +157,7 @@ func main() {
 	http.HandleFunc("/api/turnstile-token", handleTurnstileToken)
 	http.HandleFunc("/api/turnstile-status", handleTurnstileStatus)
 	http.HandleFunc("/api/proxy-status", handleProxyStatus)
+	http.HandleFunc("/api/proxies", handleProxiesAPI)
 
 	port := os.Getenv("PORT")
 	if port == "" {
