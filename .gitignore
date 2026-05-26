@@ -1,0 +1,7 @@
+server/icebot-server.exe
+server/icebot-server
+*.exe
+*.test
+*.out
+.DS_Store
+node_modules/
