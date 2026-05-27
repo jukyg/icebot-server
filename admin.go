@@ -106,6 +106,8 @@ func handleAdminBotChat(w http.ResponseWriter, r *http.Request) {
 		SessionID string `json:"sessionId"`
 		Message   string `json:"message"`
 		Count     int    `json:"count"`
+		BotID     int    `json:"botId"`
+		NumericID int    `json:"numericId"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": "bad request"})
@@ -119,9 +121,34 @@ func handleAdminBotChat(w http.ResponseWriter, r *http.Request) {
 		req.Count = 1
 	}
 
+	// Resolve target botId (support both field names)
+	botId := req.BotID
+	if botId == 0 {
+		botId = req.NumericID
+	}
+
 	sent := 0
 
-	if req.SessionID == "*all*" {
+	if botId > 0 {
+		// Targeted single bot — find it by numericId across all sessions
+		sessionsMu.RLock()
+		for _, s := range sessions {
+			s.mu.RLock()
+			if b, ok := s.bots[botId]; ok && b.IsAlive() && b.garticId.Load() != 0 {
+				sendChatMessage(b, req.Message)
+				sent++
+			}
+			s.mu.RUnlock()
+			if sent > 0 {
+				break
+			}
+		}
+		sessionsMu.RUnlock()
+		if sent == 0 {
+			json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": "bot not found or not alive"})
+			return
+		}
+	} else if req.SessionID == "*all*" {
 		sessionsMu.RLock()
 		for _, s := range sessions {
 			s.mu.RLock()
@@ -1026,10 +1053,18 @@ func handleAdminBotStart(w http.ResponseWriter, r *http.Request) {
 				srvCache:    &ServerInfoCache{},
 				connectPool: make(chan ConnectJob, 500),
 				connectDone: make(chan struct{}),
-				autofarm:    true,
+				privateMode: true,
 				createdAt:   time.Now(),
 			}
 			session.autoRejoin.Store(true)
+			session.autoRejoinConfig = &AutoJoinConfig{
+				Room:     req.Room,
+				Name:     req.Name,
+				Nick:     req.Name,
+				NickMode: "0",
+				Avatar:   "0",
+				Target:   req.Qty,
+			}
 			for i := 0; i < connectWorkers; i++ {
 				go session.connectWorker()
 			}

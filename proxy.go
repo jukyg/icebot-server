@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fatih/color"
 	"github.com/gorilla/websocket"
 )
 
@@ -235,6 +236,20 @@ func unblockProxy(ip string) {
 
 // releaseDirectSlot is a no-op placeholder for TierDirect compatibility.
 func releaseDirectSlot() {}
+
+// proxyResetLoop runs every 60 seconds and clears all blocked proxy entries,
+// allowing blocked proxies to recover and cycle back into the pool automatically.
+func proxyResetLoop() {
+	for {
+		time.Sleep(60 * time.Second)
+		blockedMu.Lock()
+		blockedProxies = make(map[string]time.Time)
+		proxyFailureCount = make(map[string]int)
+		blockedMu.Unlock()
+		color.New(color.FgHiCyan).Println("[Proxy Reset] All proxies unblocked and recycled into pool")
+		LogInfo("Proxy", "All proxies unblocked — auto-reset cycle")
+	}
+}
 
 // ProxyStats returns counts for the status API.
 func ProxyStats() (total, available, blocked int) {

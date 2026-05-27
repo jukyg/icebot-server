@@ -70,15 +70,22 @@ func (b *Bot) IsAlive() bool {
 	return b.alive.Load()
 }
 
-// SendRaw sends a raw string message on the bot's WebSocket
-func (b *Bot) SendRaw(msg string) {
+// SendRaw sends a raw string message on the bot's WebSocket.
+// Returns true if the message was sent successfully.
+func (b *Bot) SendRaw(msg string) bool {
 	b.wsMu.Lock()
 	defer b.wsMu.Unlock()
 	if b.ws != nil {
 		b.ws.SetWriteDeadline(time.Now().Add(5 * time.Second))
-		b.ws.WriteMessage(websocket.TextMessage, []byte(msg))
+		err := b.ws.WriteMessage(websocket.TextMessage, []byte(msg))
 		b.ws.SetWriteDeadline(time.Time{})
+		if err != nil {
+			b.alive.Store(false)
+			return false
+		}
+		return true
 	}
+	return false
 }
 
 // CloseWS gently closes the bot's WebSocket without cancelling the context.
@@ -657,6 +664,10 @@ func botMessageLoop(ctx context.Context, s *Session, bot *Bot, botNumId int, roo
 
 	ws := bot.ws
 	ws.SetReadLimit(4 << 20) // 4MB max message
+	ws.SetPongHandler(func(string) error {
+		ws.SetReadDeadline(time.Now().Add(180 * time.Second))
+		return nil
+	})
 	defer func() {
 		// Release premium proxy slot
 		if bot.premiumProxy != nil {
@@ -769,7 +780,9 @@ func botMessageLoop(ctx context.Context, s *Session, bot *Bot, botNumId int, roo
 			case <-hbTicker.C:
 				gid := int(bot.garticId.Load())
 				if gid > 0 && bot.alive.Load() {
-					bot.SendRaw(fmt.Sprintf("42[42,%d]", gid))
+					if !bot.SendRaw(fmt.Sprintf("42[42,%d]", gid)) {
+						return
+					}
 				}
 			case <-ctx.Done():
 				return
@@ -777,10 +790,10 @@ func botMessageLoop(ctx context.Context, s *Session, bot *Bot, botNumId int, roo
 		}
 	}()
 
-	// Private Mode answer loop: ultra-fast 100ms ticker.
-	// Each bot fires 42[13,garticId,word] in its own goroutine for concurrent burst.
+	// Private Mode answer loop: sends the answer instantly (50ms ticker).
+	// Proxy auto-reset handles any rate-limit/ban risks.
 	go func() {
-		pmTicker := time.NewTicker(100 * time.Millisecond)
+		pmTicker := time.NewTicker(50 * time.Millisecond)
 		defer pmTicker.Stop()
 		for {
 			select {
@@ -799,10 +812,9 @@ func botMessageLoop(ctx context.Context, s *Session, bot *Bot, botNumId int, roo
 				if gid == 0 {
 					continue
 				}
-				// Fire concurrently for maximum burst speed
-				go func(w string, id int64) {
-					bot.SendRaw(fmt.Sprintf(`42[13,%d,%s]`, int(id), jsonString(w)))
-				}(word, gid)
+				if !bot.SendRaw(fmt.Sprintf(`42[13,%d,%s]`, int(gid), jsonString(word))) {
+					return
+				}
 			case <-ctx.Done():
 				return
 			}

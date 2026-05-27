@@ -137,10 +137,18 @@ func GetOrCreateSession(ws *websocket.Conn, room string) *Session {
 		srvCache:    &ServerInfoCache{},
 		connectPool: make(chan ConnectJob, 500),
 		connectDone: make(chan struct{}),
-		autofarm:    true,
+		privateMode: true,
 		createdAt:   time.Now(),
 	}
 	s.autoRejoin.Store(true)
+	s.autoRejoinConfig = &AutoJoinConfig{
+		Room:     room,
+		Name:     "Bot",
+		Nick:     "Bot",
+		NickMode: "0",
+		Avatar:   "0",
+		Target:   10,
+	}
 
 	for i := 0; i < connectWorkers; i++ {
 		go s.connectWorker()
@@ -150,9 +158,11 @@ func GetOrCreateSession(ws *websocket.Conn, room string) *Session {
 	color.New(color.FgHiCyan).Printf("[Session %s] Created (room=%s)\n", id, room)
 
 	s.Send(map[string]interface{}{
-		"event":     "sessionCreated",
-		"sessionId": id,
-		"marked":    s.marked,
+		"event":       "sessionCreated",
+		"sessionId":   id,
+		"marked":      s.marked,
+		"autofarm":    false,
+		"privateMode": true,
 	})
 
 	return s
@@ -295,10 +305,17 @@ func (s *Session) Reattach(ws *websocket.Conn) {
 
 	color.New(color.FgHiGreen).Printf("[Session %s] Reattached successfully! Syncing %d bots...\n", s.id, len(s.bots))
 
+	s.mu.RLock()
+	af := s.autofarm
+	pm := s.privateMode
+	s.mu.RUnlock()
+
 	s.Send(map[string]interface{}{
-		"event":     "sessionCreated",
-		"sessionId": s.id,
-		"marked":    s.marked,
+		"event":       "sessionCreated",
+		"sessionId":   s.id,
+		"marked":      s.marked,
+		"autofarm":    af,
+		"privateMode": pm,
 	})
 
 	// Synchronize bots list instantly
@@ -347,6 +364,33 @@ func (s *Session) CloseConn(ws *websocket.Conn) {
 	sessionsMu.Lock()
 	delete(sessions, s.id)
 	sessionsMu.Unlock()
+}
+
+// sessionReaper periodically cleans up orphaned sessions that have no alive bots
+// and are beyond their rejoin window. Runs every 60 seconds.
+func sessionReaper() {
+	for {
+		time.Sleep(60 * time.Second)
+		sessionsMu.Lock()
+		for id, s := range sessions {
+			s.mu.RLock()
+			isOrph := s.orphaned
+			aliveCount := 0
+			for _, b := range s.bots {
+				if b.IsAlive() && b.joinConfirmed.Load() {
+					aliveCount++
+				}
+			}
+			age := time.Since(s.createdAt)
+			s.mu.RUnlock()
+
+			if isOrph && aliveCount == 0 && age > 5*time.Minute {
+				color.New(color.FgHiYellow).Printf("[Session Reaper] Cleaning up orphaned session %s (room=%s) — no alive bots\n", id, s.room)
+				delete(sessions, id)
+			}
+		}
+		sessionsMu.Unlock()
+	}
 }
 
 // joinWithTurbo creates N bots quickly, consuming from turbo pool first.
@@ -518,9 +562,24 @@ func (s *Session) HandleMessage(raw []byte) {
 		}
 		s.mu.RLock()
 		bot, ok := s.bots[numId]
+		if !ok {
+			gid := int(getFloat(msg, "garticId", 0))
+			if gid > 0 {
+				for _, b := range s.bots {
+					if int(b.garticId.Load()) == gid {
+						bot = b
+						ok = true
+						break
+					}
+				}
+			}
+		}
 		s.mu.RUnlock()
 		if ok && bot.IsAlive() && bot.joinConfirmed.Load() {
-			bot.SendRaw(fmt.Sprintf(`42[11,%d,%s]`, int(bot.garticId.Load()), jsonString(text)))
+			gid := int(bot.garticId.Load())
+			if gid > 0 {
+				bot.SendRaw(fmt.Sprintf(`42[11,%d,%s]`, gid, jsonString(text)))
+			}
 		}
 
 	case "answer":

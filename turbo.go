@@ -349,6 +349,10 @@ func turboStartReadLoop(s *Session, entry *TurboEntry, ctx context.Context) {
 
 	ws := entry.ws
 	ws.SetReadLimit(4 << 20)
+	ws.SetPongHandler(func(string) error {
+		ws.SetReadDeadline(time.Now().Add(120 * time.Second))
+		return nil
+	})
 
 	for {
 		select {

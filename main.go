@@ -192,6 +192,11 @@ func main() {
 	http.HandleFunc("/bird/api/auto-deploy/immune-rooms", handleAutoDeployImmuneRooms)
 	http.HandleFunc("/bird/api/auto-deploy/forced-rooms", handleAutoDeployForcedRooms)
 
+	// Start session reaper to clean up orphaned sessions
+	go sessionReaper()
+	// Start proxy reset loop to unblock proxies every 60s
+	go proxyResetLoop()
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8090"
