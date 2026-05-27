@@ -193,6 +193,7 @@ func main() {
 	http.HandleFunc("/api/admin/proxy/reset", handleAdminProxyReset)
 	http.HandleFunc("/api/admin/logs", handleAdminLogs)
 	http.HandleFunc("/api/admin/health", handleAdminHealth)
+	http.HandleFunc("/api/admin/bot/chat", handleAdminBotChat)
 
 	// Bird auto-deploy API
 	http.HandleFunc("/bird/api/auto-deploy", handleAutoDeployList)
