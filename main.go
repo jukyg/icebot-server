@@ -190,6 +190,9 @@ func main() {
 	http.HandleFunc("/api/admin/bot/start", handleAdminBotStart)
 	http.HandleFunc("/api/admin/bot/stop", handleAdminBotStop)
 	http.HandleFunc("/api/admin/proxy/upload", handleAdminProxyUpload)
+	http.HandleFunc("/api/admin/proxy/reset", handleAdminProxyReset)
+	http.HandleFunc("/api/admin/logs", handleAdminLogs)
+	http.HandleFunc("/api/admin/health", handleAdminHealth)
 
 	// Bird auto-deploy API
 	http.HandleFunc("/bird/api/auto-deploy", handleAutoDeployList)

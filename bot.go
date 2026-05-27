@@ -891,6 +891,7 @@ func botMessageLoop(ctx context.Context, s *Session, bot *Bot, botNumId int, roo
 			joinTimer.Stop()
 			unblockProxy(bot.proxyIp)
 			atomic.StoreInt32(&s.consecutiveRoomFull, 0)
+			LogSuccess("Bot", fmt.Sprintf("Bot #%d (%s) joined room %s [garticId=%d]", botNumId, bot.nick, room, bot.garticId.Load()))
 
 			if len(parsed) > 1 {
 				bot.garticLongId = fmt.Sprintf("%v", parsed[1])
@@ -1093,6 +1094,7 @@ func botMessageLoop(ctx context.Context, s *Session, bot *Bot, botNumId int, roo
 			if !s.quietLogs.Load() {
 				red.Printf("  Bot %d: gartic rejected join with code %s (%s)\n", botNumId, subCode, reason)
 			}
+			LogWarn("Bot", fmt.Sprintf("Bot #%d rejected: code %s (%s)", botNumId, subCode, reason))
 			bot.Destroy()
 				return
 			}
