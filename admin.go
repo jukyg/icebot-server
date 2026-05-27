@@ -160,128 +160,6 @@ func handleAdminBotChat(w http.ResponseWriter, r *http.Request) {
 }
 
 // ──────────────────────────────────────────────────────────────────────
-// AI Chat + Gemini config handlers (from aiapi.go)
-// ──────────────────────────────────────────────────────────────────────
-
-func handleAIChatAPI(w http.ResponseWriter, r *http.Request) {
-	if !requirePassword(w, r) {
-		return
-	}
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Content-Type", "application/json")
-
-	switch r.Method {
-	case "GET":
-		entries := autoDeploy.GetAll()
-		aiEntries := make([]map[string]interface{}, 0)
-		for _, e := range entries {
-			if e.AIChat {
-				aiEntries = append(aiEntries, map[string]interface{}{
-					"trackedID": e.TrackedID,
-					"name":      e.Name,
-					"persona":   e.AIPersona,
-					"message":   e.Message,
-				})
-			}
-		}
-
-		sessionsMu.RLock()
-		sessionsList := make([]map[string]interface{}, 0)
-		for _, s := range sessions {
-			s.mu.RLock()
-			enabled := s.aiChatEnabled
-			room := s.room
-			botCount := len(s.bots)
-			s.mu.RUnlock()
-			sessionsList = append(sessionsList, map[string]interface{}{
-				"id":      s.id,
-				"room":    room,
-				"enabled": enabled,
-				"bots":    botCount,
-			})
-		}
-		sessionsMu.RUnlock()
-
-		cfg := GetConfig()
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"masterEnabled":     autoDeploy.Master(),
-			"tracked":           aiEntries,
-			"sessions":          sessionsList,
-			"geminiKeySet":      cfg.GeminiAPIKey != "",
-			"geminiModel":       GeminiModel(),
-			"geminiReady":       GeminiReady(),
-		})
-
-	case "POST":
-		var req struct {
-			SessionID string `json:"sessionId"`
-			Enabled   bool   `json:"enabled"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
-			return
-		}
-		sessionsMu.RLock()
-		s, ok := sessions[req.SessionID]
-		sessionsMu.RUnlock()
-		if !ok {
-			http.Error(w, fmt.Sprintf("session %s not found", req.SessionID), http.StatusNotFound)
-			return
-		}
-		s.mu.Lock()
-		s.aiChatEnabled = req.Enabled
-		s.mu.Unlock()
-		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "enabled": req.Enabled})
-
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
-}
-
-func handleGeminiConfig(w http.ResponseWriter, r *http.Request) {
-	if !requirePassword(w, r) {
-		return
-	}
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Content-Type", "application/json")
-
-	switch r.Method {
-	case "GET":
-		cfg := GetConfig()
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"geminiKeySet": cfg.GeminiAPIKey != "",
-			"geminiModel":  GeminiModel(),
-			"geminiReady":  GeminiReady(),
-		})
-
-	case "POST":
-		var req struct {
-			APIKey string `json:"apiKey"`
-			Model  string `json:"model"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
-			return
-		}
-		if req.APIKey != "" {
-			SetGeminiAPIKey(req.APIKey)
-		}
-		if req.Model != "" {
-			SetGeminiModel(req.Model)
-		}
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"ok":           true,
-			"geminiKeySet": GeminiKey() != "",
-			"geminiModel":  GeminiModel(),
-			"geminiReady":  GeminiReady(),
-		})
-
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
-}
-
-// ──────────────────────────────────────────────────────────────────────
 // Admin HTML
 // ──────────────────────────────────────────────────────────────────────
 
@@ -700,8 +578,7 @@ table.admin-table td.gid{color:var(--text-4);font-size:0.7rem}
 </div>
 
 <div class="tab-bar" id="tabBar">
-  <button class="tab-btn active" data-tab="tabAI">AI Hub</button>
-  <button class="tab-btn" data-tab="tabBots">Bot Control</button>
+  <button class="tab-btn active" data-tab="tabBots">Bot Control</button>
   <button class="tab-btn" data-tab="tabSpam">Chat Spam</button>
   <button class="tab-btn" data-tab="tabProxy">Proxy Manager</button>
   <button class="tab-btn" data-tab="tabRooms">Room Tracker</button>
@@ -711,51 +588,8 @@ table.admin-table td.gid{color:var(--text-4);font-size:0.7rem}
 
 <div class="main">
 
-<!-- TAB 1: AI HUB -->
-<div class="tab-panel active" id="tabAI">
-  <div class="section-label">AI Engine</div>
-  <div class="card">
-    <div class="card-title">Gemini API Configuration</div>
-    <div class="row">
-      <div class="col-2">
-        <input type="password" id="admGeminiKey" placeholder="Gemini API Key" class="w-full" spellcheck="false" />
-      </div>
-      <div class="col">
-        <select id="admGeminiModel" class="w-full">
-          <option value="gemini-2.0-flash-lite">Flash Lite (fastest)</option>
-          <option value="gemini-2.0-flash">Flash</option>
-          <option value="gemini-1.5-flash">1.5 Flash</option>
-          <option value="gemini-2.5-pro-exp-03-25">2.5 Pro (best)</option>
-        </select>
-      </div>
-      <button class="btn btn-gold" id="admSaveGemini">SAVE</button>
-    </div>
-    <div class="row mt-4">
-      <span class="stat-mini">Status <span class="num" id="admGeminiStatus">Not configured</span></span>
-      <span class="stat-mini">Model <span class="num" id="admGeminiModelStatus">—</span></span>
-    </div>
-  </div>
-
-  <div class="section-label">AI Chat Mode</div>
-  <div class="card">
-    <div class="row">
-      <label class="toggle-row">
-        <input type="checkbox" id="admAIChatToggle" />
-        Enable AI Chat
-      </label>
-      <span class="badge badge-idle" id="admAiBadge">INACTIVE</span>
-      <span style="font-size:0.7rem;color:var(--text-4);margin-left:auto">Bots auto-reply to tracked players via Gemini</span>
-    </div>
-  </div>
-
-  <div class="section-label">Tracked Players (AI Enabled)</div>
-  <div class="card">
-    <div id="admPersonaList" style="font-size:0.8rem;color:var(--text-3);min-height:50px">Loading...</div>
-  </div>
-</div>
-
-<!-- TAB 2: BOT CONTROL -->
-<div class="tab-panel" id="tabBots">
+<!-- TAB 1: BOT CONTROL -->
+<div class="tab-panel active" id="tabBots">
   <div class="section-label">Deploy Bots</div>
   <div class="card">
     <div class="card-title">Quick Deploy</div>
@@ -787,7 +621,7 @@ table.admin-table td.gid{color:var(--text-4);font-size:0.7rem}
   <div class="card">
     <div class="table-wrap">
       <table class="admin-table" id="admSessionTable">
-        <thead><tr><th>Session</th><th>Room</th><th>Bots</th><th>Joined</th><th>AI</th><th>Actions</th></tr></thead>
+        <thead><tr><th>Session</th><th>Room</th><th>Bots</th><th>Joined</th><th>Actions</th></tr></thead>
         <tbody id="admSessionBody"></tbody>
       </table>
     </div>
@@ -898,7 +732,7 @@ table.admin-table td.gid{color:var(--text-4);font-size:0.7rem}
   <div class="card">
     <div class="table-wrap">
       <table class="admin-table" id="admRoomTable">
-        <thead><tr><th>Room</th><th>Session</th><th>Bots</th><th>Joined</th><th>AI Chat</th><th>Uptime</th><th>Action</th></tr></thead>
+        <thead><tr><th>Room</th><th>Session</th><th>Bots</th><th>Joined</th><th>Uptime</th><th>Action</th></tr></thead>
         <tbody id="admRoomBody"></tbody>
       </table>
     </div>
@@ -965,8 +799,6 @@ function init(){
   var ids = [
     'hdDot','hdStatus','hdBots','hdRooms','hdMem',
     'tabBar',
-    'admGeminiKey','admGeminiModel','admSaveGemini','admGeminiStatus','admGeminiModelStatus',
-    'admAIChatToggle','admAiBadge','admPersonaList',
     'admBotRoom','admBotQty','admBotName','admBurstMode','admStartBots','admBotResult',
     'admSessionBody','admSessionTable','admSessionInfo','admStopAll',
     'admSpamRoom','admSpamCount','admSpamMessage','admSpamSend','admSpamStart','admSpamStop',
@@ -990,37 +822,6 @@ function init(){
     document.querySelectorAll('.tab-panel').forEach(function(p){p.classList.remove('active')});
     var panel = document.getElementById(btn.getAttribute('data-tab'));
     if(panel) panel.classList.add('active');
-  });
-
-  // Save Gemini
-  D.admSaveGemini.addEventListener('click', function(){
-    var key = D.admGeminiKey.value.trim();
-    var model = D.admGeminiModel.value;
-    if(!key){ toast('Enter Gemini API Key','err'); return; }
-    apiPost('/api/gemini-config', {apiKey:key, model:model}, function(d){
-      if(d && d.ok){
-        D.admGeminiKey.value = '';
-        toast('Gemini config saved','ok');
-        pollAll();
-      } else {
-        toast('Failed to save Gemini config','err');
-      }
-    });
-  });
-
-  // AI Chat toggle
-  D.admAIChatToggle.addEventListener('change', function(){
-    var enabled = D.admAIChatToggle.checked;
-    if(!PW){ toast('Not authenticated','err'); D.admAIChatToggle.checked = !enabled; return; }
-    apiPost('/api/ai-chat', {sessionId:'', enabled:enabled}, function(d){
-      if(d && d.ok){
-        toast('AI Chat '+(enabled?'engaged':'disengaged'), enabled?'ok':'info');
-        pollAll();
-      } else {
-        D.admAIChatToggle.checked = !enabled;
-        toast('Toggle failed','err');
-      }
-    });
   });
 
   // Start bots
@@ -1266,41 +1067,6 @@ function pollAll(){
     }
   });
 
-  // AI Chat + Gemini
-  apiGet('/api/ai-chat', function(d){
-    if(!d) return;
-    var anyOn = false;
-    if(d.sessions){ d.sessions.forEach(function(s){ if(s.enabled) anyOn=true; }); }
-    D.admAIChatToggle.checked = anyOn;
-    D.admAiBadge.textContent = anyOn ? 'ACTIVE' : 'INACTIVE';
-    D.admAiBadge.className = 'badge ' + (anyOn ? 'badge-on' : 'badge-idle');
-    D.admGeminiStatus.textContent = d.geminiReady ? 'READY' : (d.geminiKeySet ? 'KEY SET' : 'NOT CONFIGURED');
-    D.admGeminiStatus.style.color = d.geminiReady ? 'var(--green)' : (d.geminiKeySet ? 'var(--amber)' : 'var(--text-4)');
-    D.admGeminiModelStatus.textContent = d.geminiModel || '—';
-    if(d.geminiModel){
-      for(var i=0;i<D.admGeminiModel.options.length;i++){
-        if(D.admGeminiModel.options[i].value === d.geminiModel){
-          D.admGeminiModel.selectedIndex = i; break;
-        }
-      }
-    }
-  });
-
-  // Tracked players
-  apiGet('/api/ai-chat', function(d){
-    if(!d||!d.tracked) return;
-    if(d.tracked.length===0){
-      D.admPersonaList.innerHTML = '<div style="color:var(--text-4)">No tracked players with AI chat enabled. Use Bird to track players.</div>';
-    } else {
-      var html = '';
-      d.tracked.forEach(function(t){
-        html += '<div class="p-persona"><span class="p-name">&#9654; ' + esc(t.name||t.trackedID) + '</span>' +
-          '<div class="p-desc">Persona: ' + esc(t.persona||'none') + ' &middot; ID: ' + esc(t.trackedID) + '</div></div>';
-      });
-      D.admPersonaList.innerHTML = html;
-    }
-  });
-
   // Sessions + Rooms
   apiGet('/api/admin/rooms', function(d){
     if(!d||!d.sessions) return;
@@ -1309,12 +1075,11 @@ function pollAll(){
     var sCnt=0, bCnt=0, jCnt=0;
     d.sessions.forEach(function(s){
       sCnt++; bCnt+=s.bots||0; jCnt+=s.joined||0;
-      var ai = s.aiChat ? '<span class="badge badge-on">ON</span>' : '<span class="badge badge-off">OFF</span>';
       shtml += '<tr><td class="gid">' + esc(s.id) + '</td><td>' + esc(s.room||'—') + '</td>' +
-        '<td class="mono">'+(s.bots||0)+'</td><td class="mono" style="color:var(--green)">'+(s.joined||0)+'</td><td>'+ai+'</td>' +
+        '<td class="mono">'+(s.bots||0)+'</td><td class="mono" style="color:var(--green)">'+(s.joined||0)+'</td>' +
         '<td><button class="btn btn-red btn-sm" onclick="stopSess(\''+esc(s.id)+'\')">STOP</button></td></tr>';
       rhtml += '<tr><td>' + esc(s.room||'—') + '</td><td class="gid">' + esc(s.id) + '</td>' +
-        '<td class="mono">'+(s.bots||0)+'</td><td class="mono" style="color:var(--green)">'+(s.joined||0)+'</td><td>'+ai+'</td>' +
+        '<td class="mono">'+(s.bots||0)+'</td><td class="mono" style="color:var(--green)">'+(s.joined||0)+'</td>' +
         '<td style="font-size:0.7rem;color:var(--text-4)">'+(s.uptime||'—')+'</td>' +
         '<td><button class="btn btn-amber btn-sm" onclick="sendToRoom(\''+esc(s.id)+'\')">SEND</button></td></tr>';
       // Build room select options for spam tab
@@ -1425,7 +1190,6 @@ type adminSessionInfo struct {
 	Room   string `json:"room"`
 	Bots   int    `json:"bots"`
 	Joined int    `json:"joined"`
-	AIChat bool   `json:"aiChat"`
 	Uptime string `json:"uptime"`
 }
 
@@ -1441,10 +1205,9 @@ func handleAdminRooms(w http.ResponseWriter, r *http.Request) {
 	for _, s := range sessions {
 		s.mu.RLock()
 		info := adminSessionInfo{
-			ID:     s.id,
-			Room:   s.room,
-			Bots:   len(s.bots),
-			AIChat: s.aiChatEnabled,
+			ID:   s.id,
+			Room: s.room,
+			Bots: len(s.bots),
 		}
 		joined := 0
 		for _, b := range s.bots {
@@ -1581,6 +1344,7 @@ func handleAdminBotStop(w http.ResponseWriter, r *http.Request) {
 	if req.SessionID == "*all*" {
 		sessionsMu.RLock()
 		for _, s := range sessions {
+			s.autoRejoin.Store(false)
 			s.mu.Lock()
 			for _, b := range s.bots {
 				b.Destroy()
@@ -1602,6 +1366,7 @@ func handleAdminBotStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.autoRejoin.Store(false)
 	s.mu.Lock()
 	count := len(s.bots)
 	for _, b := range s.bots {

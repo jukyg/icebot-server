@@ -14,8 +14,6 @@ type TrackedEntry struct {
 	Message     string   `json:"message"`
 	Kick        bool     `json:"kick"`
 	Loyalty     bool     `json:"loyalty"`
-	AIChat      bool     `json:"aiChat"`
-	AIPersona   string   `json:"aiPersona"`
 }
 
 type AutoDeployRegistry struct {

@@ -1794,57 +1794,6 @@ kbd{
 
   </div>
 
-  <!-- AI CHAT MODE ------------------------------------------------- -->
-  <div class="section-label">AI Chat Mode</div>
-
-  <div class="sys-card hud-corners fade-up" style="padding:16px 18px">
-    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-      <label class="ar-toggle" style="margin:0">
-        <input type="checkbox" id="aiChatMasterToggle" />
-        <span class="ar-track"></span>
-      </label>
-      <span style="font-size:0.72rem;color:var(--text-2);letter-spacing:0.05em">
-        AI Chat <span id="aiChatStatusLabel">Disengaged</span>
-      </span>
-      <span style="margin-left:auto;font-size:0.62rem;color:var(--text-4)" id="aiChatTrackedCount">0 tracked</span>
-    </div>
-    <div id="aiChatInfo" style="margin-top:10px;font-size:0.65rem;color:var(--text-3);display:none">
-      Bots will auto-reply to chat messages from tracked players who have AI chat enabled.
-    </div>
-
-    <!-- Dashboard auth (for API calls when proxy not unlocked) -->
-    <div style="margin-top:10px;display:flex;gap:8px;align-items:center" id="aiChatAuthRow">
-      <input type="password" id="aiChatPassword" placeholder="Dashboard password" spellcheck="false"
-        style="flex:1;min-width:120px;padding:5px 8px;font-size:0.65rem;background:var(--raised);border:1px solid var(--border-1);border-radius:var(--r-xs);color:var(--text-1);outline:none;font-family:var(--font-mono)" />
-      <button id="aiChatAuthBtn" class="icon-btn" style="padding:4px 10px;font-size:0.6rem">AUTH</button>
-      <span id="aiChatAuthStatus" style="font-size:0.6rem;color:var(--text-4)">Not authenticated</span>
-    </div>
-
-    <!-- Gemini config -->
-    <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border-1)">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-        <span style="font-size:0.65rem;color:var(--text-2);letter-spacing:0.05em;text-transform:uppercase">Gemini AI Engine</span>
-        <span id="geminiStatusDot" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--text-4)"></span>
-        <span id="geminiStatusLabel" style="font-size:0.62rem;color:var(--text-4)">Not configured</span>
-      </div>
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <input type="password" id="geminiApiKey" placeholder="Enter Gemini API Key" spellcheck="false"
-          style="flex:1;min-width:160px;padding:6px 10px;font-size:0.7rem;background:var(--raised);border:1px solid var(--border-1);border-radius:var(--r-xs);color:var(--text-1);outline:none;font-family:var(--font-mono)" />
-        <select id="geminiModelSelect"
-          style="padding:6px 8px;font-size:0.7rem;background:var(--raised);border:1px solid var(--border-1);border-radius:var(--r-xs);color:var(--text-1);outline:none">
-          <option value="gemini-2.0-flash-lite">Flash Lite (fastest)</option>
-          <option value="gemini-2.0-flash">Flash</option>
-          <option value="gemini-1.5-flash">1.5 Flash</option>
-          <option value="gemini-2.5-pro-exp-03-25">2.5 Pro (best)</option>
-        </select>
-        <button id="saveGeminiBtn" class="icon-btn" style="padding:4px 12px;font-size:0.65rem">SAVE</button>
-      </div>
-      <div style="margin-top:6px;font-size:0.6rem;color:var(--text-4)" id="geminiHelp">
-        Get a free API key at <span style="color:var(--cyan)">aistudio.google.com/apikey</span>
-      </div>
-    </div>
-  </div>
-
   <!-- SYSTEM INFO ------------------------------------------------- -->
   <div class="section-label">System</div>
 
@@ -2232,18 +2181,6 @@ var D = {
   sysSessions:      document.getElementById('sysSessions'),
   sysTime:          document.getElementById('sysTime'),
   toastRoot:        document.getElementById('toast-root'),
-  aiChatToggle:     document.getElementById('aiChatMasterToggle'),
-  aiChatStatus:     document.getElementById('aiChatStatusLabel'),
-  aiChatTracked:    document.getElementById('aiChatTrackedCount'),
-  aiChatInfo:       document.getElementById('aiChatInfo'),
-  aiChatPassword:   document.getElementById('aiChatPassword'),
-  aiChatAuthBtn:    document.getElementById('aiChatAuthBtn'),
-  aiChatAuthStatus: document.getElementById('aiChatAuthStatus'),
-  geminiApiKey:     document.getElementById('geminiApiKey'),
-  geminiModel:      document.getElementById('geminiModelSelect'),
-  geminiSaveBtn:    document.getElementById('saveGeminiBtn'),
-  geminiStatusDot:  document.getElementById('geminiStatusDot'),
-  geminiStatusLabel:document.getElementById('geminiStatusLabel')
 };
 
 /* ==============================================================
@@ -2294,10 +2231,6 @@ function apiPassword(){
 }
 
 function updateAuthUI(){
-  var authed = !!state.password;
-  D.aiChatAuthStatus.textContent = authed ? 'Authenticated' : 'Not authenticated';
-  D.aiChatAuthStatus.style.color = authed ? 'var(--green)' : 'var(--text-4)';
-  if(authed) D.aiChatAuthRow.style.display = 'none';
 }
 
 function fetchStats(){
@@ -2369,90 +2302,6 @@ function fetchStats(){
 
   xhr.onerror   = function(){ setStatus('offline'); };
   xhr.ontimeout = function(){ setStatus('degraded'); };
-  xhr.send();
-}
-
-function fetchAIChatIfUnlocked(){
-  if(apiPassword()){
-    fetchAIChat();
-  }
-}
-
-/* ==============================================================
-   FETCH AI CHAT STATUS
-   ============================================================== */
-function fetchAIChat(){
-  var pw = apiPassword();
-  if(!pw) return;
-  var xhr = new XMLHttpRequest();
-  xhr.open('GET', '/api/ai-chat?password='+encodeURIComponent(pw), true);
-  xhr.timeout = 6000;
-  xhr.onload = function(){
-    if(xhr.status !== 200) return;
-    try{
-      var d = JSON.parse(xhr.responseText);
-      var tracked = d.tracked || [];
-      var sessions = d.sessions || [];
-      var anyOn = false;
-      for(var i=0;i<sessions.length;i++){
-        if(sessions[i].enabled){ anyOn = true; break; }
-      }
-      D.aiChatToggle.checked = anyOn;
-      D.aiChatStatus.textContent = anyOn ? 'Engaged' : 'Disengaged';
-      D.aiChatInfo.style.display = anyOn ? 'block' : 'none';
-      D.aiChatTracked.textContent = tracked.length + ' AI-tracked';
-      // Gemini status
-      if(d.geminiReady){
-        D.geminiStatusDot.style.background = 'var(--green)';
-        D.geminiStatusLabel.textContent = 'Ready (' + (d.geminiModel || 'gemini-2.0-flash-lite') + ')';
-        D.geminiStatusLabel.style.color = 'var(--green)';
-      } else if(d.geminiKeySet){
-        D.geminiStatusDot.style.background = 'var(--amber)';
-        D.geminiStatusLabel.textContent = 'Key set, not ready';
-        D.geminiStatusLabel.style.color = 'var(--amber)';
-      } else {
-        D.geminiStatusDot.style.background = 'var(--text-4)';
-        D.geminiStatusLabel.textContent = 'Not configured';
-        D.geminiStatusLabel.style.color = 'var(--text-4)';
-      }
-    } catch(e){}
-  };
-  xhr.send();
-}
-
-function fetchGeminiConfig(){
-  var pw = apiPassword();
-  if(!pw) return;
-  var xhr = new XMLHttpRequest();
-  xhr.open('GET', '/api/gemini-config?password='+encodeURIComponent(pw), true);
-  xhr.timeout = 6000;
-  xhr.onload = function(){
-    if(xhr.status !== 200) return;
-    try{
-      var d = JSON.parse(xhr.responseText);
-      if(d.geminiModel){
-        for(var i=0;i<D.geminiModel.options.length;i++){
-          if(D.geminiModel.options[i].value === d.geminiModel){
-            D.geminiModel.selectedIndex = i;
-            break;
-          }
-        }
-      }
-      if(d.geminiReady){
-        D.geminiStatusDot.style.background = 'var(--green)';
-        D.geminiStatusLabel.textContent = 'Ready (' + d.geminiModel + ')';
-        D.geminiStatusLabel.style.color = 'var(--green)';
-      } else if(d.geminiKeySet){
-        D.geminiStatusDot.style.background = 'var(--amber)';
-        D.geminiStatusLabel.textContent = 'Key set';
-        D.geminiStatusLabel.style.color = 'var(--amber)';
-      } else {
-        D.geminiStatusDot.style.background = 'var(--text-4)';
-        D.geminiStatusLabel.textContent = 'Not configured';
-        D.geminiStatusLabel.style.color = 'var(--text-4)';
-      }
-    } catch(e){}
-  };
   xhr.send();
 }
 
@@ -2567,8 +2416,6 @@ function loadProxies(pw, silent){
         toast('Proxy pool unlocked — '+d.available+' available, '+d.blocked+' blocked','success');
         startProxyAutoRefresh();
         updateAuthUI();
-        fetchAIChatIfUnlocked();
-        fetchGeminiConfig();
       }
 
       D.proxyRefreshTime.textContent = new Date().toLocaleTimeString();
@@ -2791,89 +2638,6 @@ function bindEvents(){
   // Auto-refresh toggle
   D.proxyAutoRefresh.addEventListener('change', startProxyAutoRefresh);
 
-  // AI Chat auth
-  D.aiChatAuthBtn.addEventListener('click', function(){
-    var pw = D.aiChatPassword.value.trim();
-    if(!pw){ toast('Enter dashboard password','error'); return; }
-    state.password = pw;
-    updateAuthUI();
-    toast('Authenticated — fetching AI Chat status','success');
-    fetchAIChat();
-    fetchGeminiConfig();
-    D.aiChatPassword.value = '';
-  });
-  D.aiChatPassword.addEventListener('keydown', function(e){
-    if(e.key==='Enter'){ e.preventDefault(); D.aiChatAuthBtn.click(); }
-  });
-
-  // AI Chat toggle
-  D.aiChatToggle.addEventListener('change', function(){
-    var enabled = D.aiChatToggle.checked;
-    var pw = apiPassword();
-    if(!pw){ toast('Authenticate first (enter dashboard password above)','error'); D.aiChatToggle.checked = !enabled; return; }
-    var xhr = new XMLHttpRequest();
-    xhr.open('POST', '/api/ai-chat?password='+encodeURIComponent(pw), true);
-    xhr.setRequestHeader('Content-Type', 'application/json');
-    xhr.onload = function(){
-      if(xhr.status === 200){
-        try{
-          var d = JSON.parse(xhr.responseText);
-          if(d.enabled){
-            D.aiChatStatus.textContent = 'Engaged';
-            D.aiChatInfo.style.display = 'block';
-            toast('AI Chat engaged — bots will auto-reply','success');
-          } else {
-            D.aiChatStatus.textContent = 'Disengaged';
-            D.aiChatInfo.style.display = 'none';
-            toast('AI Chat disengaged','info');
-          }
-        } catch(e){}
-      } else {
-        D.aiChatToggle.checked = !enabled;
-        toast('Failed to toggle AI Chat','error');
-      }
-    };
-    xhr.onerror = function(){
-      D.aiChatToggle.checked = !enabled;
-      toast('Network error','error');
-    };
-    xhr.send(JSON.stringify({sessionId: '', enabled: enabled}));
-  });
-
-  // Save Gemini config
-  D.geminiSaveBtn.addEventListener('click', function(){
-    var apiKey = D.geminiApiKey.value.trim();
-    var model = D.geminiModel.value;
-    if(!apiKey){
-      toast('Enter a Gemini API key first','error');
-      return;
-    }
-    var pw = apiPassword();
-    if(!pw){ toast('Authenticate first (enter dashboard password in the field above)','error'); return; }
-    var xhr = new XMLHttpRequest();
-    xhr.open('POST', '/api/gemini-config?password='+encodeURIComponent(pw), true);
-    xhr.setRequestHeader('Content-Type', 'application/json');
-    xhr.onload = function(){
-      if(xhr.status === 200){
-        try{
-          var d = JSON.parse(xhr.responseText);
-          if(d.ok){
-            D.geminiApiKey.value = '';
-            D.geminiStatusDot.style.background = 'var(--green)';
-            D.geminiStatusLabel.textContent = 'Ready (' + d.geminiModel + ')';
-            D.geminiStatusLabel.style.color = 'var(--green)';
-            toast('Gemini API key saved — AI will use Gemini now','success');
-            fetchAIChat();
-          }
-        } catch(e){}
-      } else {
-        toast('Failed to save Gemini config','error');
-      }
-    };
-    xhr.onerror = function(){ toast('Network error','error'); };
-    xhr.send(JSON.stringify({apiKey: apiKey, model: model}));
-  });
-
   // API chips — open with password if unlocked
   document.querySelectorAll('.api-chip').forEach(function(chip){
     chip.addEventListener('click',function(){
@@ -2950,13 +2714,6 @@ function init(){
   // Start polling
   fetchStats();
   state.statsIntervalId = setInterval(fetchStats, STATS_INTERVAL);
-
-  // AI Chat + Gemini
-  if(apiPassword()){
-    fetchAIChat();
-    fetchGeminiConfig();
-  }
-  setInterval(fetchAIChatIfUnlocked, 10000);
 
   // Redraw charts on resize
   window.addEventListener('resize', function(){

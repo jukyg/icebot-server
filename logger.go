@@ -131,10 +131,6 @@ func logProxyFailure(ip, port string, err error) {
 	LogWarn("Proxy", fmt.Sprintf("Proxy %s:%s failed: %v", ip, port, err))
 }
 
-func logAIChatResponse(targetName, response string) {
-	LogInfo("AI", fmt.Sprintf("Replied to %s: \"%s\"", targetName, response))
-}
-
 func logSessionAction(sessionID, action string) {
 	LogInfo("Session", fmt.Sprintf("[%s] %s", sessionID, action))
 }

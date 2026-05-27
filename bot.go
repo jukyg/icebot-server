@@ -996,19 +996,6 @@ func botMessageLoop(ctx context.Context, s *Session, bot *Bot, botNumId int, roo
 					"source": botNumId,
 				})
 
-				// AI chat mode: if enabled, check if message is from a tracked player
-				s.mu.RLock()
-				aiEnabled := s.aiChatEnabled
-				s.mu.RUnlock()
-				if aiEnabled && autoDeploy.Master() {
-					chatUserIDInt := int64(0)
-					if id, ok := parsed[1].(float64); ok {
-						chatUserIDInt = int64(id)
-					}
-					if chatUserIDInt != 0 && chatUserIDInt != bot.garticId.Load() {
-						go s.handleAIChatResponse(chatUserIDInt, chatMsg, bot, botNumId)
-					}
-				}
 			}
 
 		case "16": // Turn signal — drawing round started
