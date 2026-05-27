@@ -1812,6 +1812,14 @@ kbd{
       Bots will auto-reply to chat messages from tracked players who have AI chat enabled.
     </div>
 
+    <!-- Dashboard auth (for API calls when proxy not unlocked) -->
+    <div style="margin-top:10px;display:flex;gap:8px;align-items:center" id="aiChatAuthRow">
+      <input type="password" id="aiChatPassword" placeholder="Dashboard password" spellcheck="false"
+        style="flex:1;min-width:120px;padding:5px 8px;font-size:0.65rem;background:var(--raised);border:1px solid var(--border-1);border-radius:var(--r-xs);color:var(--text-1);outline:none;font-family:var(--font-mono)" />
+      <button id="aiChatAuthBtn" class="icon-btn" style="padding:4px 10px;font-size:0.6rem">AUTH</button>
+      <span id="aiChatAuthStatus" style="font-size:0.6rem;color:var(--text-4)">Not authenticated</span>
+    </div>
+
     <!-- Gemini config -->
     <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border-1)">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
@@ -2228,6 +2236,9 @@ var D = {
   aiChatStatus:     document.getElementById('aiChatStatusLabel'),
   aiChatTracked:    document.getElementById('aiChatTrackedCount'),
   aiChatInfo:       document.getElementById('aiChatInfo'),
+  aiChatPassword:   document.getElementById('aiChatPassword'),
+  aiChatAuthBtn:    document.getElementById('aiChatAuthBtn'),
+  aiChatAuthStatus: document.getElementById('aiChatAuthStatus'),
   geminiApiKey:     document.getElementById('geminiApiKey'),
   geminiModel:      document.getElementById('geminiModelSelect'),
   geminiSaveBtn:    document.getElementById('saveGeminiBtn'),
@@ -2275,9 +2286,25 @@ function animateTo(el, target, suffix){
 /* ==============================================================
    FETCH STATS
    ============================================================== */
+/* ==============================================================
+   AUTH HELPERS
+   ============================================================== */
+function apiPassword(){
+  return state.password || '';
+}
+
+function updateAuthUI(){
+  var authed = !!state.password;
+  D.aiChatAuthStatus.textContent = authed ? 'Authenticated' : 'Not authenticated';
+  D.aiChatAuthStatus.style.color = authed ? 'var(--green)' : 'var(--text-4)';
+  if(authed) D.aiChatAuthRow.style.display = 'none';
+}
+
 function fetchStats(){
+  var pw = apiPassword();
+  if(!pw){ setStatus('noauth'); return; }
   var xhr = new XMLHttpRequest();
-  xhr.open('GET','/api/status',true);
+  xhr.open('GET', '/api/status?password='+encodeURIComponent(pw), true);
   xhr.timeout = 8000;
 
   xhr.onload = function(){
@@ -2346,7 +2373,7 @@ function fetchStats(){
 }
 
 function fetchAIChatIfUnlocked(){
-  if(state.unlocked || state.password){
+  if(apiPassword()){
     fetchAIChat();
   }
 }
@@ -2355,7 +2382,7 @@ function fetchAIChatIfUnlocked(){
    FETCH AI CHAT STATUS
    ============================================================== */
 function fetchAIChat(){
-  var pw = state.password;
+  var pw = apiPassword();
   if(!pw) return;
   var xhr = new XMLHttpRequest();
   xhr.open('GET', '/api/ai-chat?password='+encodeURIComponent(pw), true);
@@ -2394,7 +2421,7 @@ function fetchAIChat(){
 }
 
 function fetchGeminiConfig(){
-  var pw = state.password;
+  var pw = apiPassword();
   if(!pw) return;
   var xhr = new XMLHttpRequest();
   xhr.open('GET', '/api/gemini-config?password='+encodeURIComponent(pw), true);
@@ -2432,8 +2459,10 @@ function fetchGeminiConfig(){
 function setStatus(s){
   D.statusPill.className = 'status-pill ' + s;
   D.statusDot.className  = 'status-dot' + (s==='online'?' pulse':'');
-  D.statusLabel.textContent = s.toUpperCase();
-  if(D.sysStatus) D.sysStatus.textContent = s.toUpperCase();
+  var label = s.toUpperCase();
+  if(s === 'noauth') label = 'AUTH REQUIRED';
+  D.statusLabel.textContent = label;
+  if(D.sysStatus) D.sysStatus.textContent = label;
 }
 
 /* ==============================================================
@@ -2537,7 +2566,9 @@ function loadProxies(pw, silent){
         D.proxyContent.classList.add('visible');
         toast('Proxy pool unlocked — '+d.available+' available, '+d.blocked+' blocked','success');
         startProxyAutoRefresh();
+        updateAuthUI();
         fetchAIChatIfUnlocked();
+        fetchGeminiConfig();
       }
 
       D.proxyRefreshTime.textContent = new Date().toLocaleTimeString();
@@ -2760,10 +2791,26 @@ function bindEvents(){
   // Auto-refresh toggle
   D.proxyAutoRefresh.addEventListener('change', startProxyAutoRefresh);
 
+  // AI Chat auth
+  D.aiChatAuthBtn.addEventListener('click', function(){
+    var pw = D.aiChatPassword.value.trim();
+    if(!pw){ toast('Enter dashboard password','error'); return; }
+    state.password = pw;
+    updateAuthUI();
+    toast('Authenticated — fetching AI Chat status','success');
+    fetchAIChat();
+    fetchGeminiConfig();
+    D.aiChatPassword.value = '';
+  });
+  D.aiChatPassword.addEventListener('keydown', function(e){
+    if(e.key==='Enter'){ e.preventDefault(); D.aiChatAuthBtn.click(); }
+  });
+
   // AI Chat toggle
   D.aiChatToggle.addEventListener('change', function(){
     var enabled = D.aiChatToggle.checked;
-    var pw = state.password || '';
+    var pw = apiPassword();
+    if(!pw){ toast('Authenticate first (enter dashboard password above)','error'); D.aiChatToggle.checked = !enabled; return; }
     var xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/ai-chat?password='+encodeURIComponent(pw), true);
     xhr.setRequestHeader('Content-Type', 'application/json');
@@ -2801,7 +2848,8 @@ function bindEvents(){
       toast('Enter a Gemini API key first','error');
       return;
     }
-    var pw = state.password || '';
+    var pw = apiPassword();
+    if(!pw){ toast('Authenticate first (enter dashboard password in the field above)','error'); return; }
     var xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/gemini-config?password='+encodeURIComponent(pw), true);
     xhr.setRequestHeader('Content-Type', 'application/json');
@@ -2896,16 +2944,19 @@ function init(){
   drawLineChart('proxyChart',    proxyHistory,    '#00e676', 'rgba(0,230,118,0.08)');
   drawRing(0, 80);
 
+  // Auth UI sync
+  updateAuthUI();
+
   // Start polling
   fetchStats();
   state.statsIntervalId = setInterval(fetchStats, STATS_INTERVAL);
 
   // AI Chat + Gemini
-  fetchAIChatIfUnlocked();
+  if(apiPassword()){
+    fetchAIChat();
+    fetchGeminiConfig();
+  }
   setInterval(fetchAIChatIfUnlocked, 10000);
-  setTimeout(function(){
-    if(state.password) fetchGeminiConfig();
-  }, 500);
 
   // Redraw charts on resize
   window.addEventListener('resize', function(){
