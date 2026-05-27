@@ -87,7 +87,7 @@ func sendChatMessage(b *Bot, msg string) {
 	if gid == 0 {
 		return
 	}
-	b.SendRaw(fmt.Sprintf(`42[11,%d,%s]`, int(gid), jsonString(msg)))
+	b.SendRaw(fmt.Sprintf(`42[13,%d,%s]`, int(gid), jsonString(msg)))
 }
 
 func handleAdminBotChat(w http.ResponseWriter, r *http.Request) {

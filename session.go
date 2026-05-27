@@ -577,7 +577,7 @@ func (s *Session) HandleMessage(raw []byte) {
 		s.mu.RUnlock()
 		if ok && bot.IsAlive() && bot.garticId.Load() != 0 {
 			gid := int(bot.garticId.Load())
-			if !bot.SendRaw(fmt.Sprintf(`42[11,%d,%s]`, gid, jsonString(text))) {
+			if !bot.SendRaw(fmt.Sprintf(`42[13,%d,%s]`, gid, jsonString(text))) {
 				yellow.Printf("[%s] Chat send failed for bot %d\n", s.id, numId)
 			}
 		} else {
@@ -609,7 +609,6 @@ func (s *Session) HandleMessage(raw []byte) {
 		s.ForEachBot(func(b *Bot) {
 			if b.joinConfirmed.Load() {
 				gid := int(b.garticId.Load())
-				b.SendRaw(fmt.Sprintf(`42[11,%d,%s]`, gid, jsonString(text)))
 				b.SendRaw(fmt.Sprintf(`42[13,%d,%s]`, gid, jsonString(text)))
 			}
 		})
@@ -621,7 +620,7 @@ func (s *Session) HandleMessage(raw []byte) {
 		}
 		s.ForEachBot(func(b *Bot) {
 			if b.joinConfirmed.Load() {
-				b.SendRaw(fmt.Sprintf(`42[11,%d,%s]`, int(b.garticId.Load()), jsonString(text)))
+				b.SendRaw(fmt.Sprintf(`42[13,%d,%s]`, int(b.garticId.Load()), jsonString(text)))
 			}
 		})
 

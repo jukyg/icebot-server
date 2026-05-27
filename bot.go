@@ -928,10 +928,9 @@ func botMessageLoop(ctx context.Context, s *Session, bot *Bot, botNumId int, roo
 			for _, m := range joinMessages {
 				switch m.Type {
 				case "broadcast":
-					bot.SendRaw(fmt.Sprintf(`42[11,%d,%s]`, gid, jsonString(m.Msg)))
 					bot.SendRaw(fmt.Sprintf(`42[13,%d,%s]`, gid, jsonString(m.Msg)))
 				case "message":
-					bot.SendRaw(fmt.Sprintf(`42[11,%d,%s]`, gid, jsonString(m.Msg)))
+					bot.SendRaw(fmt.Sprintf(`42[13,%d,%s]`, gid, jsonString(m.Msg)))
 				case "answer":
 					bot.SendRaw(fmt.Sprintf(`42[13,%d,%s]`, gid, jsonString(m.Msg)))
 				}
