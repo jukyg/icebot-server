@@ -575,10 +575,16 @@ func (s *Session) HandleMessage(raw []byte) {
 			}
 		}
 		s.mu.RUnlock()
-		if ok && bot.IsAlive() && bot.joinConfirmed.Load() {
+		if ok && bot.IsAlive() && bot.garticId.Load() != 0 {
 			gid := int(bot.garticId.Load())
-			if gid > 0 {
-				bot.SendRaw(fmt.Sprintf(`42[11,%d,%s]`, gid, jsonString(text)))
+			if !bot.SendRaw(fmt.Sprintf(`42[11,%d,%s]`, gid, jsonString(text))) {
+				yellow.Printf("[%s] Chat send failed for bot %d\n", s.id, numId)
+			}
+		} else {
+			if !ok {
+				yellow.Printf("[%s] Chat: bot %d not found\n", s.id, numId)
+			} else if !bot.IsAlive() {
+				yellow.Printf("[%s] Chat: bot %d not alive\n", s.id, numId)
 			}
 		}
 

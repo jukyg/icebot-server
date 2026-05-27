@@ -790,10 +790,10 @@ func botMessageLoop(ctx context.Context, s *Session, bot *Bot, botNumId int, roo
 		}
 	}()
 
-	// Private Mode answer loop: sends the answer instantly (50ms ticker).
-	// Proxy auto-reset handles any rate-limit/ban risks.
+	// Private Mode answer loop: sends the answer with a safe buffer (400ms ticker)
+	// to avoid Gartic's anti-bot kicking while still answering within <1s.
 	go func() {
-		pmTicker := time.NewTicker(50 * time.Millisecond)
+		pmTicker := time.NewTicker(400 * time.Millisecond)
 		defer pmTicker.Stop()
 		for {
 			select {
