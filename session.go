@@ -71,6 +71,8 @@ type Session struct {
 	// new bot creation is stopped until a successful join or new JOIN command.
 	consecutiveRoomFull int32
 
+	createdAt          time.Time
+
 	// Rejoin throttle: prevents auto-rejoin storms when multiple bots
 	// disconnect simultaneously. Only one rejoin operation runs at a time,
 	// with a minimum 500ms interval between them.
@@ -135,7 +137,8 @@ func GetOrCreateSession(ws *websocket.Conn, room string) *Session {
 		srvCache:    &ServerInfoCache{},
 		connectPool: make(chan ConnectJob, 500),
 		connectDone: make(chan struct{}),
-		autofarm: true,
+		autofarm:    true,
+		createdAt:   time.Now(),
 	}
 	s.autoRejoin.Store(true)
 

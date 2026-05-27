@@ -184,6 +184,13 @@ func main() {
 	http.HandleFunc("/api/ai-chat", handleAIChatAPI)
 	http.HandleFunc("/api/gemini-config", handleGeminiConfig)
 
+	// Admin API
+	http.HandleFunc("/admin", handleAdmin)
+	http.HandleFunc("/api/admin/rooms", handleAdminRooms)
+	http.HandleFunc("/api/admin/bot/start", handleAdminBotStart)
+	http.HandleFunc("/api/admin/bot/stop", handleAdminBotStop)
+	http.HandleFunc("/api/admin/proxy/upload", handleAdminProxyUpload)
+
 	// Bird auto-deploy API
 	http.HandleFunc("/bird/api/auto-deploy", handleAutoDeployList)
 	http.HandleFunc("/bird/api/auto-deploy/upsert", handleAutoDeployUpsert)
