@@ -55,6 +55,7 @@ type Session struct {
 	lastAutoRejoinTime time.Time
 	autofarm           bool
 	privateMode        bool
+	aiChatEnabled      bool
 	currentDrawerId    atomic.Int64
 	currentDrawWord    string
 	reporterBotId      int
@@ -192,6 +193,47 @@ func (s *Session) SendGameEvent(botNumId int, event map[string]interface{}) {
 	if botNumId == reporter {
 		s.Send(event)
 	}
+}
+
+func (s *Session) handleAIChatResponse(senderGarticID int64, chatMsg string, senderBot *Bot, botNumId int) {
+	entry := autoDeploy.Get(fmt.Sprintf("%d", senderGarticID))
+	if entry == nil {
+		return
+	}
+	if !entry.AIChat {
+		return
+	}
+
+	persona := entry.AIPersona
+	targetName := entry.Name
+
+	s.mu.RLock()
+	bots := make([]*Bot, 0, len(s.bots))
+	for _, b := range s.bots {
+		if b.IsAlive() && b.garticId.Load() != senderGarticID {
+			bots = append(bots, b)
+		}
+	}
+	s.mu.RUnlock()
+
+	if len(bots) == 0 {
+		return
+	}
+
+	delay := time.Duration(200+rand.Intn(600)) * time.Millisecond
+	time.Sleep(delay)
+
+	response := aiChatResponseForTarget(chatMsg, persona, targetName)
+	if response == "" {
+		return
+	}
+
+	responder := bots[rand.Intn(len(bots))]
+	gid := responder.garticId.Load()
+	if gid == 0 {
+		return
+	}
+	responder.SendRaw(fmt.Sprintf(`42[11,%d,%s]`, int(gid), jsonString(response)))
 }
 
 // ForEachBot runs a function on each alive bot.
@@ -838,6 +880,14 @@ func (s *Session) HandleMessage(raw []byte) {
 			s.currentDrawerId.Store(0)
 		}
 		yellow.Printf("[%s] PRIVATE MODE %v\n", s.id, enabled)
+
+	case "setAIChat":
+		enabled, _ := msg["enabled"].(bool)
+		s.mu.Lock()
+		s.aiChatEnabled = enabled
+		s.mu.Unlock()
+		color.New(color.FgHiGreen).Printf("[%s] AI CHAT %v\n", s.id, enabled)
+		s.Send(map[string]interface{}{"event": "aiChatStatus", "enabled": enabled})
 
 	default:
 		if cmd != "" {

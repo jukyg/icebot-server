@@ -161,6 +161,14 @@ func main() {
 	green.Printf("  ▸ Server Port      : %s\n", "8090")
 	fmt.Println()
 
+	// Load persisted config (Gemini API key, model, etc.)
+	LoadConfig()
+	if GeminiReady() {
+		green.Printf("  ▸ Gemini AI         : READY (%s)\n", GeminiModel())
+	} else {
+		green.Printf("  ▸ Gemini AI         : not configured (set API key in dashboard)\n")
+	}
+
 	// Start the turnstile token puller
 	StartTurnstilePuller()
 	green.Println("  ▸ System Status    : ONLINE & ACTIVE")
@@ -173,6 +181,16 @@ func main() {
 	http.HandleFunc("/api/turnstile-status", handleTurnstileStatus)
 	http.HandleFunc("/api/proxy-status", handleProxyStatus)
 	http.HandleFunc("/api/proxies", handleProxiesAPI)
+	http.HandleFunc("/api/ai-chat", handleAIChatAPI)
+	http.HandleFunc("/api/gemini-config", handleGeminiConfig)
+
+	// Bird auto-deploy API
+	http.HandleFunc("/bird/api/auto-deploy", handleAutoDeployList)
+	http.HandleFunc("/bird/api/auto-deploy/upsert", handleAutoDeployUpsert)
+	http.HandleFunc("/bird/api/auto-deploy/delete", handleAutoDeployDelete)
+	http.HandleFunc("/bird/api/auto-deploy/master", handleAutoDeployMaster)
+	http.HandleFunc("/bird/api/auto-deploy/immune-rooms", handleAutoDeployImmuneRooms)
+	http.HandleFunc("/bird/api/auto-deploy/forced-rooms", handleAutoDeployForcedRooms)
 
 	port := os.Getenv("PORT")
 	if port == "" {

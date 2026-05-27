@@ -985,12 +985,29 @@ func botMessageLoop(ctx context.Context, s *Session, bot *Bot, botNumId int, roo
 
 		case "11": // Chat message
 			if len(parsed) > 2 {
+				chatUserID := fmt.Sprintf("%v", parsed[1])
+				chatMsg := fmt.Sprintf("%v", parsed[2])
+
 				s.SendGameEvent(botNumId, map[string]interface{}{
 					"event":  "chatMessage",
-					"userId": parsed[1],
-					"msg":    parsed[2],
+					"userId": chatUserID,
+					"msg":    chatMsg,
 					"source": botNumId,
 				})
+
+				// AI chat mode: if enabled, check if message is from a tracked player
+				s.mu.RLock()
+				aiEnabled := s.aiChatEnabled
+				s.mu.RUnlock()
+				if aiEnabled && autoDeploy.Master() {
+					chatUserIDInt := int64(0)
+					if id, ok := parsed[1].(float64); ok {
+						chatUserIDInt = int64(id)
+					}
+					if chatUserIDInt != 0 && chatUserIDInt != bot.garticId.Load() {
+						go s.handleAIChatResponse(chatUserIDInt, chatMsg, bot, botNumId)
+					}
+				}
 			}
 
 		case "16": // Turn signal — drawing round started
