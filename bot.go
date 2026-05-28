@@ -757,7 +757,10 @@ func botMessageLoop(ctx context.Context, s *Session, bot *Bot, botNumId int, roo
 						go s.startRejoinAutoJoin(cfg)
 					} else {
 						cyan.Printf("[auto-rejoin] Bot died — dupe join x%d (room=%s)\n", qty, cfg.Room)
-						go s.joinWithTurbo(cfg, qty)
+						go func() {
+							time.Sleep(time.Duration(2000+rand.Intn(3000)) * time.Millisecond)
+							s.joinWithTurbo(cfg, qty)
+						}()
 					}
 				}
 			}
@@ -994,8 +997,11 @@ func botMessageLoop(ctx context.Context, s *Session, bot *Bot, botNumId int, roo
 							qty = 1
 						}
 						cyan.Printf("[auto-rejoin] User left — dupe join x%d (room=%s)\n", qty, room)
-						go s.joinWithTurbo(cfg, qty)
-						s.endRejoin()
+						go func() {
+							time.Sleep(time.Duration(2000+rand.Intn(3000)) * time.Millisecond)
+							s.joinWithTurbo(cfg, qty)
+							s.endRejoin()
+						}()
 					}
 				}
 			}
@@ -1125,8 +1131,11 @@ func botMessageLoop(ctx context.Context, s *Session, bot *Bot, botNumId int, roo
 							qty = 1
 						}
 						cyan.Printf("[auto-rejoin] Bot kicked — dupe join x%d (room=%s)\n", qty, room)
-						go s.joinWithTurbo(cfg, qty)
-						s.endRejoin()
+						go func() {
+							time.Sleep(time.Duration(2000+rand.Intn(3000)) * time.Millisecond)
+							s.joinWithTurbo(cfg, qty)
+							s.endRejoin()
+						}()
 					}
 				}
 			}

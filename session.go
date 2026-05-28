@@ -250,8 +250,8 @@ func (s *Session) tryBeginRejoin() bool {
 		return false
 	}
 	s.mu.Lock()
-	since := time.Since(s.lastAutoRejoinTime)
-	if since < 500*time.Millisecond {
+		since := time.Since(s.lastAutoRejoinTime)
+	if since < 3*time.Second {
 		s.mu.Unlock()
 		s.rejoinInProgress.Store(false)
 		return false
@@ -424,10 +424,6 @@ func (s *Session) joinWithTurbo(cfg *AutoJoinConfig, qty int) {
 	s.isAutoJoining.Store(true)
 	defer s.isAutoJoining.Store(false)
 
-	// Small random jitter to prevent thundering herd when multiple
-	// rejoin triggers fire within the same throttle window.
-	time.Sleep(time.Duration(rand.Intn(200)) * time.Millisecond)
-
 	turboUsed := 0
 	s.turboMu.Lock()
 	turboOn := s.turboMode
@@ -445,13 +441,18 @@ func (s *Session) startRejoinAutoJoin(cfg *AutoJoinConfig) {
 	s.isAutoJoining.Store(true)
 	defer s.isAutoJoining.Store(false)
 
+	// Wait for old sockets to fully drain before deploying new bots
+	time.Sleep(time.Duration(2000+rand.Intn(3000)) * time.Millisecond)
+
 	qty := cfg.Target
 	if qty <= 0 {
 		qty = 1
 	}
 	for i := 0; i < qty; i++ {
 		createBot(s, cfg.Room, cfg.Name, cfg.NickMode, cfg.Avatar, cfg.CustomNicks, cfg.JoinMessages, cfg.Server, cfg.Idioma)
-		time.Sleep(50 * time.Millisecond)
+		if i < qty-1 {
+			time.Sleep(time.Duration(800+rand.Intn(700)) * time.Millisecond)
+		}
 	}
 
 	// Wait for all to join (up to 90s total)

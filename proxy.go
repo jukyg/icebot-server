@@ -66,7 +66,10 @@ func (p *ResidentialProxy) Address() string {
 
 // ProxyURL returns the HTTP proxy URL with embedded credentials.
 func (p *ResidentialProxy) ProxyURL() string {
-	return fmt.Sprintf("http://%s:%s@%s:%s", p.Username, p.Password, p.IP, p.Port)
+	if p.Username != "" {
+		return fmt.Sprintf("http://%s:%s@%s:%s", p.Username, p.Password, p.IP, p.Port)
+	}
+	return fmt.Sprintf("http://%s:%s", p.IP, p.Port)
 }
 
 // BasicAuth returns the Base64-encoded "username:password" for Proxy-Authorization.
@@ -323,11 +326,12 @@ func dialThroughProxy(proxy *ResidentialProxy, targetHost string) (net.Conn, err
 	connectReq := fmt.Sprintf(
 		"CONNECT %s HTTP/1.1\r\n"+
 			"Host: %s\r\n"+
-			"Proxy-Authorization: Basic %s\r\n"+
-			"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n"+
-			"\r\n",
-		targetHost, targetHost, proxy.BasicAuth(),
-	)
+			"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n",
+		targetHost, targetHost)
+	if proxy.Username != "" {
+		connectReq += fmt.Sprintf("Proxy-Authorization: Basic %s\r\n", proxy.BasicAuth())
+	}
+	connectReq += "\r\n"
 	_, err = proxyConn.Write([]byte(connectReq))
 	if err != nil {
 		proxyConn.Close()
