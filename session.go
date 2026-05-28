@@ -39,6 +39,15 @@ type AutoJoinConfig struct {
 // AutoRejoinConfig is an alias kept for compatibility with older code paths.
 type AutoRejoinConfig = AutoJoinConfig
 
+// Global room registries for rejoin/keepEmpty — cross-session, room-keyed.
+var (
+	rejoinRooms     = make(map[string]bool)
+	keepEmptyRooms  = make(map[string]bool)
+	keepEmptyCounts = make(map[string]int)
+	rejoinMu        sync.RWMutex
+	keepEmptyMu     sync.RWMutex
+)
+
 // Session manages a single extension ↔ server connection.
 type Session struct {
 	id                 string
@@ -55,6 +64,7 @@ type Session struct {
 	lastAutoRejoinTime time.Time
 	autofarm           bool
 	privateMode        bool
+	answerReveal       bool
 
 	currentDrawerId    atomic.Int64
 	currentDrawWord    string
@@ -163,6 +173,7 @@ func GetOrCreateSession(ws *websocket.Conn, room string) *Session {
 		"marked":      s.marked,
 		"autofarm":    false,
 		"privateMode": true,
+		"answerReveal": s.answerReveal,
 	})
 
 	return s
@@ -308,14 +319,25 @@ func (s *Session) Reattach(ws *websocket.Conn) {
 	s.mu.RLock()
 	af := s.autofarm
 	pm := s.privateMode
+	ar := s.answerReveal
 	s.mu.RUnlock()
 
+	rejoinMu.RLock()
+	rj := rejoinRooms[s.room]
+	ke := keepEmptyRooms[s.room]
+	kc := keepEmptyCounts[s.room]
+	rejoinMu.RUnlock()
+
 	s.Send(map[string]interface{}{
-		"event":       "sessionCreated",
-		"sessionId":   s.id,
-		"marked":      s.marked,
-		"autofarm":    af,
-		"privateMode": pm,
+		"event":          "sessionCreated",
+		"sessionId":      s.id,
+		"marked":         s.marked,
+		"autofarm":       af,
+		"privateMode":    pm,
+		"answerReveal":   ar,
+		"rejoin":         rj,
+		"keepEmpty":      ke,
+		"keepEmptyCount": kc,
 	})
 
 	// Synchronize bots list instantly
@@ -906,6 +928,13 @@ func (s *Session) HandleMessage(raw []byte) {
 			s.currentDrawerId.Store(0)
 		}
 		yellow.Printf("[%s] PRIVATE MODE %v\n", s.id, enabled)
+
+	case "answerReveal":
+		enabled, _ := msg["enabled"].(bool)
+		s.mu.Lock()
+		s.answerReveal = enabled
+		s.mu.Unlock()
+		yellow.Printf("[%s] ANSWER REVEAL %v\n", s.id, enabled)
 
 	default:
 		if cmd != "" {

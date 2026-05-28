@@ -1018,6 +1018,7 @@ func botMessageLoop(ctx context.Context, s *Session, bot *Bot, botNumId int, roo
 			s.mu.RLock()
 			af := s.autofarm
 			priv := s.privateMode
+			ar := s.answerReveal
 			s.mu.RUnlock()
 			// Extract the word from parsed[1].
 			// Gartic may send flat [16, "word", ...] or nested [16, ["word", ...]].
@@ -1030,6 +1031,18 @@ func botMessageLoop(ctx context.Context, s *Session, bot *Bot, botNumId int, roo
 					if w, ok := arr[0].(string); ok {
 						word = w
 					}
+				}
+			}
+			// 0) Answer Reveal — send word to extension if our bot is the drawer
+			if ar && word != "" {
+				s.Send(map[string]interface{}{
+					"event":  "answerReveal",
+					"word":   word,
+					"botId":  botNumId,
+					"botNumericId": botNumId,
+				})
+				if !s.quietLogs.Load() {
+					cyan.Printf("[Bot %d] Answer Reveal: word=%q\n", botNumId, word)
 				}
 			}
 			// 1) Store the word for the Private Mode answer loop
