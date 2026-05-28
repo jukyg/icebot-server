@@ -325,9 +325,11 @@ func (s *Session) Reattach(ws *websocket.Conn) {
 
 	rejoinMu.RLock()
 	rj := rejoinRooms[s.room]
+	rejoinMu.RUnlock()
+	keepEmptyMu.RLock()
 	ke := keepEmptyRooms[s.room]
 	kc := keepEmptyCounts[s.room]
-	rejoinMu.RUnlock()
+	keepEmptyMu.RUnlock()
 
 	s.Send(map[string]interface{}{
 		"event":          "sessionCreated",
@@ -917,6 +919,29 @@ func (s *Session) HandleMessage(raw []byte) {
 		s.marked = enabled
 		s.mu.Unlock()
 		s.Send(map[string]interface{}{"event": "markStatus", "marked": enabled})
+
+	case "keepEmpty":
+		enabled, _ := msg["enabled"].(bool)
+		count := int(getFloat(msg, "count", 1))
+		keepEmptyMu.Lock()
+		keepEmptyRooms[s.room] = enabled
+		keepEmptyCounts[s.room] = count
+		keepEmptyMu.Unlock()
+		s.Send(map[string]interface{}{
+			"event":      "keepEmptyStatus",
+			"keepEmpty":  enabled,
+			"count":      count,
+		})
+
+	case "rejoin":
+		enabled, _ := msg["enabled"].(bool)
+		rejoinMu.Lock()
+		rejoinRooms[s.room] = enabled
+		rejoinMu.Unlock()
+		s.Send(map[string]interface{}{
+			"event":  "rejoinStatus",
+			"rejoin": enabled,
+		})
 
 	case "autofarm":
 		enabled, _ := msg["enabled"].(bool)
