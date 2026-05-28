@@ -35,7 +35,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	// Require password for WebSocket connections
 	pw := r.URL.Query().Get("password")
-	if pw == "" || !timingSafeEqual(pw, dashboardPassword) {
+	if pw == "" || !timingSafeEqual(pw, wssPassword) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write([]byte("unauthorized — invalid or missing password"))

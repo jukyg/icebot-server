@@ -20,6 +20,11 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// blankZero and blankOne are invisible Unicode characters used in nick generation
+// (U+2800 Braille blank, U+3164 Hangul filler).
+var blankZero = "\u2800"
+var blankOne = "\u3164"
+
 // sanitizeNick removes invisible suffix characters from a nickname for log
 // display. The invisible characters (U+2800, U+3164) used in nick generation
 // render as garbled Unicode in terminals and log files.

@@ -171,6 +171,7 @@ func GetOrCreateSession(ws *websocket.Conn, room string) *Session {
 		"event":       "sessionCreated",
 		"sessionId":   id,
 		"marked":      s.marked,
+		"autoRejoin":  s.autoRejoin.Load(),
 		"autofarm":    false,
 		"privateMode": true,
 		"answerReveal": s.answerReveal,
@@ -332,6 +333,7 @@ func (s *Session) Reattach(ws *websocket.Conn) {
 		"event":          "sessionCreated",
 		"sessionId":      s.id,
 		"marked":         s.marked,
+		"autoRejoin":     s.autoRejoin.Load(),
 		"autofarm":       af,
 		"privateMode":    pm,
 		"answerReveal":   ar,
@@ -544,13 +546,17 @@ func (s *Session) HandleMessage(raw []byte) {
 		}
 
 	case "exit":
-		yellow.Printf("[%s] EXIT all bots\n", s.id)
+		yellow.Printf("[%s] EXIT — destroying all bots\n", s.id)
 		if s.autoJoinCancel != nil {
 			s.autoJoinCancel()
 			s.autoJoinCancel = nil
 		}
+		s.StopTurbo()
 		s.DestroyAllBots()
-		s.Send(map[string]interface{}{"event": "botSync", "bots": []interface{}{}})
+		s.Send(map[string]interface{}{
+			"event": "botSync",
+			"bots":  []map[string]interface{}{},
+		})
 
 	case "exitBot":
 		numId := int(getFloat(msg, "numericId", 0))

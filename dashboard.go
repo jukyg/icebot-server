@@ -23,10 +23,11 @@ import (
 //   - Bulk copy, CSV export, per-column sort
 //   - Keyboard shortcuts, custom cursor, scanline overlay
 //
-// Password: saif1234
+// Password: saif1234 (dashboard/admin), you123 (WSS)
 // ============================================================================
 
 const dashboardPassword = "saif1234"
+var wssPassword = "you123"
 
 // ---------------------------------------------------------------------------
 // Rate-limiter for the proxy API endpoint

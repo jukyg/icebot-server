@@ -17,22 +17,20 @@ import (
 // never joins the room.
 const maxNickRunes = 18
 
-// Invisible blank characters used to make plain ("mode 0") nicks unique
-// WITHOUT changing how they look on screen.
+// arabicHiddenChars are the zero-WIDTH characters used to make plain ("mode 0")
+// nicks unique WITHOUT adding any visible gap — this matches the extension's
+// addHiddenCharToArabicName exactly.
 //
 // Why this is needed: gartic refuses a join when the nickname is already
-// present in the room. With mode 0 every bot would join with the exact same
-// plain name, so they all collide and only the first one gets in. By encoding
-// a per-bot counter in these two invisible characters, the visible name stays
-// clean and suffix-free while every nick is still unique on the wire — so all
-// the bots join.
+// present in the room. With mode 0 every bot would otherwise join with the
+// exact same plain name, collide, and only the first one would get in.
 //
-// Both characters render as blank and are NOT whitespace, so gartic does not
-// trim them.
-const (
-	blankZero = "ㅤ" // HANGUL FILLER
-	blankOne  = "⠀" // BRAILLE PATTERN BLANK
-)
+// Why these specific characters: the old approach used HANGUL FILLER / BRAILLE
+// BLANK, which actually take up width and show up as an ugly space/gap inside
+// the name. These four — WORD JOINER, FUNCTION APPLICATION, INVISIBLE TIMES,
+// INVISIBLE SEPARATOR — have ZERO width, so the name renders with no gap at all
+// while still being unique on the wire.
+var arabicHiddenChars = []rune{'\u2060', '\u2061', '\u2062', '\u2063'}
 
 // NickResult contains the generated nickname and optional avatar override.
 type NickResult struct {
@@ -40,22 +38,18 @@ type NickResult struct {
 	Avatar *int
 }
 
-// invisibleSuffix encodes n as a short binary string built from the two
-// invisible characters. n=1 -> 1 char, n up to 255 -> 8 chars, etc.
-func invisibleSuffix(n int) string {
-	if n <= 0 {
-		return ""
-	}
-	var b strings.Builder
-	for n > 0 {
-		if n&1 == 1 {
-			b.WriteString(blankOne)
-		} else {
-			b.WriteString(blankZero)
-		}
-		n >>= 1
-	}
-	return b.String()
+// addHiddenChar inserts a run of 1–3 identical zero-width characters at a random
+// position inside name, mirroring the extension's addHiddenCharToArabicName.
+// The inserted characters are invisible and have no width, so the name shows
+// with no gap, while the random character / position / repeat count keep each
+// bot's nick unique so gartic does not reject the duplicate-name joins.
+func addHiddenChar(name string) string {
+	chars := []rune(name)
+	idx := rand.Intn(len(chars) + 1)
+	hidden := arabicHiddenChars[rand.Intn(len(arabicHiddenChars))]
+	count := rand.Intn(3) + 1
+	run := strings.Repeat(string(hidden), count)
+	return string(chars[:idx]) + run + string(chars[idx:])
 }
 
 // clampNick builds a final nick from a base part and a suffix while
@@ -133,15 +127,16 @@ func generateNick(baseName, mode string, customNicks []CustomNick, queueNum *int
 	case "5": // Random number suffix (e.g. hi482, hi73)
 		return NickResult{Nick: clampNick(baseName, fmt.Sprintf("%d", rand.Intn(1000)))}
 
-	default: // "0" or anything else — plain, suffix-free name
-		// The name stays visually clean: we only append INVISIBLE characters
-		// so every bot has a unique nick on the wire (otherwise gartic rejects
-		// the duplicate-name joins and only one bot gets in).
-		pad := 0
-		if queueNum != nil {
-			*queueNum++
-			pad = *queueNum
+	default: // "0" or anything else — plain name with NO visible gap
+		// Insert zero-width characters into the name (exactly like the
+		// extension's addHiddenCharToArabicName) so the name stays clean with
+		// no space/gap, while every bot still gets a unique nick on the wire —
+		// otherwise gartic rejects the duplicate-name joins and only one bot
+		// gets in.
+		base := baseName
+		if strings.TrimSpace(base) == "" {
+			base = "Bot"
 		}
-		return NickResult{Nick: clampNick(baseName, invisibleSuffix(pad))}
+		return NickResult{Nick: addHiddenChar(base)}
 	}
 }

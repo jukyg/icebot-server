@@ -25,7 +25,7 @@ const turnstileChannelSize = 4096
 const turnstileSourceURL = "https://mohanadino.duckdns.org:8443/assign?wait=10"
 
 // turnstilePullTarget is the local pool size we aim to keep filled.
-const turnstilePullTarget = 20000
+const turnstilePullTarget = 2000
 
 // turnstilePullClient is a dedicated HTTP client for the puller goroutine.
 var turnstilePullClient = &http.Client{Timeout: 20 * time.Second}
