@@ -51,6 +51,9 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	room := r.URL.Query().Get("room")
 	session := GetOrCreateSession(ws, room)
 
+	red := color.New(color.FgRed)
+	boldRed := color.New(color.FgRed, color.Bold)
+
 	defer func() {
 		session.CloseConn(ws)
 		ws.Close()
@@ -60,9 +63,17 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	for {
 		_, raw, err := ws.ReadMessage()
 		if err != nil {
+			red.Printf("[WS] Read error for session %s: %s\n", session.id, err.Error())
 			break
 		}
-		session.HandleMessage(raw)
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					boldRed.Printf("[PANIC] session=%s msg=%s: %v\n", session.id, string(raw), r)
+				}
+			}()
+			session.HandleMessage(raw)
+		}()
 	}
 }
 
