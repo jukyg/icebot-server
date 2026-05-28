@@ -22,10 +22,10 @@ const turnstileTokenTTL = 120 * time.Second
 const turnstileChannelSize = 4096
 
 // turnstileSourceURL is the staging server we PULL tokens from.
-const turnstileSourceURL = "https://lm9wd.alwaysdata.net/assign-token"
+const turnstileSourceURL = "https://mohanadino.duckdns.org:8443/assign?wait=10"
 
 // turnstilePullTarget is the local pool size we aim to keep filled.
-const turnstilePullTarget = 200
+const turnstilePullTarget = 20000
 
 // turnstilePullClient is a dedicated HTTP client for the puller goroutine.
 var turnstilePullClient = &http.Client{Timeout: 20 * time.Second}
