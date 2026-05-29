@@ -1,4 +1,7 @@
 package main
+// ============================================================================
+// admin.go — Admin API endpoints
+// ============================================================================
 
 import (
 	"encoding/json"
@@ -533,6 +536,7 @@ table.data-table td.amber{color:#fbbf24}
 
 <div class="tab-bar" id="tabBar">
   <button class="tab-btn active" data-tab="tabBots">Bot Control</button>
+  <button class="tab-btn" data-tab="tabUsers">Connected Users</button>
   <button class="tab-btn" data-tab="tabSpam">Chat Spam</button>
   <button class="tab-btn" data-tab="tabProxy">Proxy Manager</button>
   <button class="tab-btn" data-tab="tabRooms">Room Tracker</button>
@@ -575,6 +579,31 @@ table.data-table td.amber{color:#fbbf24}
       <span style="font-size:0.7rem;color:#4a5a7a" id="admSessionInfo"></span>
       <button class="btn btn-danger btn-sm" id="admStopAll">Stop All</button>
     </div>
+  </div>
+</div>
+
+<!-- CONNECTED USERS -->
+<div class="tab-panel" id="tabUsers">
+  <div class="section-label">Connected Users & Extensions</div>
+  <div class="card">
+    <div class="card-title">Live Connections <span style="font-size:0.7rem;color:#4a5a7a;font-weight:400">(auto-refresh every 4s)</span></div>
+    <div class="table-wrap">
+      <table class="data-table" id="admUsersTable">
+        <thead><tr><th>Session ID</th><th>Room</th><th>Status</th><th>Bots</th><th>Joined</th><th>Uptime</th><th>Features</th><th>Action</th></tr></thead>
+        <tbody id="admUsersBody"></tbody>
+      </table>
+    </div>
+    <div class="row mt-8" style="justify-content:space-between">
+      <span style="font-size:0.7rem;color:#4a5a7a" id="admUsersInfo">0 connected</span>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-primary btn-sm" id="admUsersRefresh">Refresh Now</button>
+        <button class="btn btn-danger btn-sm" id="admKickAll">Disconnect All</button>
+      </div>
+    </div>
+  </div>
+  <div class="section-label">Bot Details per Room</div>
+  <div class="card">
+    <div id="admUserBotsDetail" style="font-size:0.78rem;color:#5a6a8a;padding:8px 0">Select a session above to see bot details.</div>
   </div>
 </div>
 
@@ -725,6 +754,7 @@ function init(){
   var ids=['hdDot','hdStatus','hdBots','hdRooms','hdMem','tabBar',
     'admBotRoom','admBotQty','admBotName','admBurstMode','admStartBots','admBotResult',
     'admSessionBody','admSessionInfo','admStopAll',
+    'admUsersBody','admUsersInfo','admUsersRefresh','admKickAll','admUserBotsDetail',
     'admSpamRoom','admSpamCount','admSpamMessage','admSpamSend','admSpamStart','admSpamStop',
     'admSpamToggle','admSpamInterval','admSpamSentCount','admSpamActiveBots','admChatHistory','admChatHistoryCount','admChatHistoryClear',
     'admProxyTotal','admProxyAvail','admProxyBlocked',
@@ -797,11 +827,18 @@ function init(){
       if(d&&d.ok){toast('Proxy list reset','ok');setTimeout(pollAll,500)}
     });
   });
+  D.admUsersRefresh.addEventListener('click',function(){pollUsers();toast('Refreshed','info')});
+  D.admKickAll.addEventListener('click',function(){
+    if(!confirm('Disconnect ALL sessions and stop ALL bots?'))return;
+    apiPost('/api/admin/bot/stop',{sessionId:'*all*'},function(d){
+      if(d&&d.ok){toast('All disconnected','ok');setTimeout(pollAll,1000)}else toast('Failed','err');
+    });
+  });
   D.admLogClear.addEventListener('click',function(){
     D.admLogViewer.innerHTML='<div style="color:#4a5a7a;text-align:center;padding:40px 0">Cleared. Waiting for new data...</div>';
     lastLogCount=0;
   });
-  pollAll();setInterval(pollAll,POLL_MS);setInterval(pollLogs,LOG_POLL_MS);
+  pollAll();setInterval(pollAll,POLL_MS);setInterval(pollLogs,LOG_POLL_MS);setInterval(pollUsers,POLL_MS);
 }
 
 function doSpamSend(){
@@ -840,7 +877,14 @@ function addChatHistory(room,msg,count){
   D.admChatHistoryCount.textContent=D.admChatHistory.querySelectorAll('.ch-entry').length+' messages';
 }
 
-function url(p){return p+'?password='+encodeURIComponent(PW)}
+function url(p){
+  var base = "";
+  if (window.location.host === "gartic.io") {
+    var savedUrl = localStorage.getItem("icebot_server_url") || "http://localhost:8090";
+    base = savedUrl.replace(/^ws/, "http").replace(/\/+$/, "");
+  }
+  return base + p + '?password=' + encodeURIComponent(PW);
+}
 function apiGet(p,cb){
   var x=new XMLHttpRequest();
   x.open('GET',url(p),true);x.timeout=10000;
@@ -927,6 +971,42 @@ function pollLogs(){
     if(D.admLogAutoScroll.checked)D.admLogViewer.scrollTop=0;
   });
 }
+function pollUsers(){
+  apiGet('/api/admin/rooms',function(d){
+    if(!d||!d.sessions)return;
+    var h='',active=0,orphaned=0;
+    d.sessions.forEach(function(s){
+      var status=s.uptime==='orphaned'?'orphaned':'active';
+      var badge=status==='active'?'<span class="badge badge-on">ACTIVE</span>':'<span class="badge badge-warn">ORPHANED</span>';
+      if(s.isOwner) badge += '<span class="badge badge-idle" style="background:#818cf8;color:white;margin-left:4px;">OWNER</span>';
+      if(status==='active')active++;else orphaned++;
+      var features='';
+      if(s.autoRejoin)features+='<span class="badge badge-on" style="margin:1px">AR</span>';
+      if(s.autofarm)features+='<span class="badge badge-on" style="margin:1px">AF</span>';
+      if(s.privateMode)features+='<span class="badge badge-idle" style="margin:1px">PM</span>';
+      if(s.turbo)features+='<span class="badge badge-warn" style="margin:1px">TB</span>';
+      if(!features)features='<span style="color:#3a4a6a">none</span>';
+      h+='<tr><td class="sub">'+esc(s.id)+'</td><td>'+esc(s.room||'---')+'</td><td>'+badge+'</td><td class="mono">'+(s.bots||0)+'</td><td class="mono green">'+(s.joined||0)+'</td><td style="font-size:0.7rem;color:#4a5a7a">'+(s.uptime||'---')+'</td><td>'+features+'</td><td><button class="btn btn-sm btn-primary" onclick="viewBots(\''+esc(s.id)+'\')">View</button> <button class="btn btn-danger btn-sm" onclick="stopSess(\''+esc(s.id)+'\')">Stop</button></td></tr>';
+    });
+    D.admUsersBody.innerHTML=h||'<tr><td colspan="8" style="text-align:center;color:#4a5a7a;padding:20px">No connections</td></tr>';
+    D.admUsersInfo.textContent=active+' active, '+orphaned+' orphaned — '+(active+orphaned)+' total';
+  });
+}
+window.viewBots=function(sid){
+  apiGet('/api/admin/rooms',function(d){
+    if(!d||!d.sessions)return;
+    var sess=null;
+    d.sessions.forEach(function(s){if(s.id===sid)sess=s});
+    if(!sess){D.admUserBotsDetail.innerHTML='<span style="color:#f87171">Session not found</span>';return}
+    var h='<div style="margin-bottom:8px"><strong style="color:#818cf8">Session:</strong> '+esc(sess.id)+' | <strong style="color:#818cf8">Room:</strong> '+esc(sess.room||'---')+' | <strong style="color:#4ade80">Bots:</strong> '+(sess.bots||0)+' ('+(sess.joined||0)+' joined)</div>';
+    if(sess.botList&&sess.botList.length>0){
+      h+='<table class="data-table"><thead><tr><th>ID</th><th>Nick</th><th>Gartic ID</th><th>Status</th></tr></thead><tbody>';
+      sess.botList.forEach(function(b){h+='<tr><td class="mono">'+(b.numericId||'?')+'</td><td>'+esc(b.nick||'---')+'</td><td class="mono">'+(b.garticId||0)+'</td><td class="green">Joined</td></tr>'});
+      h+='</tbody></table>';
+    }else{h+='<div style="color:#4a5a7a">No bot details available (bots may still be connecting)</div>'}
+    D.admUserBotsDetail.innerHTML=h;
+  });
+};
 
 window.stopSess=function(sid){
   if(!confirm('Stop session '+sid+'?'))return;
@@ -949,11 +1029,17 @@ init();
 // ──────────────────────────────────────────────────────────────────────
 
 type adminSessionInfo struct {
-	ID     string `json:"id"`
-	Room   string `json:"room"`
-	Bots   int    `json:"bots"`
-	Joined int    `json:"joined"`
-	Uptime string `json:"uptime"`
+	ID          string                   `json:"id"`
+	Room        string                   `json:"room"`
+	Bots        int                      `json:"bots"`
+	Joined      int                      `json:"joined"`
+	Uptime      string                   `json:"uptime"`
+	AutoRejoin  bool                     `json:"autoRejoin"`
+	Autofarm    bool                     `json:"autofarm"`
+	PrivateMode bool                     `json:"privateMode"`
+	Turbo       bool                     `json:"turbo"`
+	IsOwner     bool                     `json:"isOwner"`
+	BotList     []map[string]interface{} `json:"botList,omitempty"`
 }
 
 func handleAdminRooms(w http.ResponseWriter, r *http.Request) {
@@ -968,17 +1054,34 @@ func handleAdminRooms(w http.ResponseWriter, r *http.Request) {
 	for _, s := range sessions {
 		s.mu.RLock()
 		info := adminSessionInfo{
-			ID:   s.id,
-			Room: s.room,
-			Bots: len(s.bots),
+			ID:          s.id,
+			Room:        s.room,
+			Bots:        len(s.bots),
+			AutoRejoin:  s.autoRejoin.Load(),
+			Autofarm:    s.autofarm,
+			PrivateMode: s.privateMode,
+			IsOwner:     s.isOwner,
 		}
+		s.turboMu.Lock()
+		info.Turbo = s.turboMode
+		s.turboMu.Unlock()
+
 		joined := 0
+		botList := make([]map[string]interface{}, 0)
 		for _, b := range s.bots {
 			if b.joinConfirmed.Load() {
 				joined++
+				botList = append(botList, map[string]interface{}{
+					"numericId": b.numericId,
+					"garticId":  int(b.garticId.Load()),
+					"nick":      b.nick,
+					"proxyIp":   b.proxyIp,
+					"alive":     b.IsAlive(),
+				})
 			}
 		}
 		info.Joined = joined
+		info.BotList = botList
 		if !s.orphaned {
 			info.Uptime = time.Since(s.createdAt).Round(time.Second).String()
 		} else {

@@ -670,7 +670,7 @@ func botMessageLoop(ctx context.Context, s *Session, bot *Bot, botNumId int, roo
 	ws := bot.ws
 	ws.SetReadLimit(4 << 20) // 4MB max message
 	ws.SetPongHandler(func(string) error {
-		ws.SetReadDeadline(time.Now().Add(180 * time.Second))
+		ws.SetReadDeadline(time.Now().Add(600 * time.Second))
 		return nil
 	})
 	defer func() {
@@ -781,7 +781,7 @@ func botMessageLoop(ctx context.Context, s *Session, bot *Bot, botNumId int, roo
 	// 3. Signal to Gartic this bot is active (anti-AFK)
 	// This is the equivalent of wsProxy.js's Worker-backed keepalive.
 	go func() {
-		hbTicker := time.NewTicker(12 * time.Second)
+		hbTicker := time.NewTicker(10 * time.Second)
 		defer hbTicker.Stop()
 		for {
 			select {
@@ -840,7 +840,7 @@ func botMessageLoop(ctx context.Context, s *Session, bot *Bot, botNumId int, roo
 			msg = pendingMsg
 			pendingMsg = ""
 		} else {
-			ws.SetReadDeadline(time.Now().Add(180 * time.Second))
+			ws.SetReadDeadline(time.Now().Add(600 * time.Second))
 			_, raw, err := ws.ReadMessage()
 			if err != nil {
 				return

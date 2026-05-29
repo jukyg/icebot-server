@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/fatih/color"
@@ -21,8 +22,8 @@ import (
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin:     func(r *http.Request) bool { return true }, // Allow all origins
-	ReadBufferSize:  4096,
-	WriteBufferSize: 4096,
+	ReadBufferSize:  8192,
+	WriteBufferSize: 8192,
 }
 
 func handleWebSocket(w http.ResponseWriter, r *http.Request) {
@@ -49,7 +50,13 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	room := r.URL.Query().Get("room")
+	isOwner := r.URL.Query().Get("owner") == "true"
 	session := GetOrCreateSession(ws, room)
+	session.mu.Lock()
+	session.isOwner = isOwner
+	session.mu.Unlock()
+	NotifyOwnersOfClientChange()
+
 
 	// Handle pong responses to keep the connection alive through proxies.
 	ws.SetPongHandler(func(string) error {
@@ -57,22 +64,28 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 
-	red := color.New(color.FgRed)
 	boldRed := color.New(color.FgRed, color.Bold)
 
+	// Stop channel for the ping goroutine
+	pingDone := make(chan struct{})
+
 	defer func() {
+		close(pingDone) // Stop the ping goroutine first
 		session.CloseConn(ws)
 		ws.Close()
+		NotifyOwnersOfClientChange()
 	}()
 
-	// WebSocket keepalive: send ping every 25s to prevent proxy/NAT timeouts.
+	// WebSocket keepalive: send ping every 20s to prevent proxy/NAT timeouts.
 	// Many cloud reverse proxies (HostingGuru, etc.) drop idle WebSocket
 	// connections after 30-60s of inactivity.
 	go func() {
-		pingTicker := time.NewTicker(25 * time.Second)
+		pingTicker := time.NewTicker(20 * time.Second)
 		defer pingTicker.Stop()
 		for {
 			select {
+			case <-pingDone:
+				return
 			case <-pingTicker.C:
 				ws.SetWriteDeadline(time.Now().Add(5 * time.Second))
 				if err := ws.WriteControl(websocket.PingMessage, []byte("keepalive"), time.Now().Add(5*time.Second)); err != nil {
@@ -88,7 +101,13 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	for {
 		_, raw, err := ws.ReadMessage()
 		if err != nil {
-			red.Printf("[WS] Read error for session %s: %s\n", session.id, err.Error())
+			// Suppress noisy "use of closed network connection" errors
+			// These happen naturally during WebSocket reconnection and are not bugs
+			errStr := err.Error()
+			if !strings.Contains(errStr, "use of closed network connection") &&
+				!strings.Contains(errStr, "connection reset by peer") {
+				color.New(color.FgYellow).Printf("[WS] Session %s connection ended: %s\n", session.id, errStr)
+			}
 			break
 		}
 		func() {
