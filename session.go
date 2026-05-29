@@ -83,6 +83,10 @@ type Session struct {
 
 	createdAt          time.Time
 
+	// Reattachment throttle: prevents rapid reconnection loops when the
+	// extension's WebSocket keeps getting dropped by infrastructure.
+	lastReattachTime   time.Time
+
 	// Rejoin throttle: prevents auto-rejoin storms when multiple bots
 	// disconnect simultaneously. Only one rejoin operation runs at a time,
 	// with a minimum 500ms interval between them.
@@ -301,8 +305,18 @@ func (s *Session) GetBotList() []map[string]interface{} {
 }
 
 // Reattach binds a new WebSocket to this session (e.g. on page refresh).
+// Throttled to prevent rapid reconnection loops.
 func (s *Session) Reattach(ws *websocket.Conn) {
 	s.wsMu.Lock()
+	// Rate limit: if last reattach was <3s ago, reject and close the new WS.
+	// The extension will retry, but this prevents the tight error loop.
+	if time.Since(s.lastReattachTime) < 3*time.Second {
+		s.wsMu.Unlock()
+		color.New(color.FgYellow).Printf("[Session %s] Reattachment throttled — too fast\n", s.id)
+		ws.Close()
+		return
+	}
+	s.lastReattachTime = time.Now()
 	oldWs := s.ws
 	s.ws = ws
 	s.wsMu.Unlock()
@@ -366,23 +380,27 @@ func (s *Session) CloseConn(ws *websocket.Conn) {
 	color.New(color.FgYellow).Printf("[Session %s] Extension disconnected\n", s.id)
 
 	s.mu.Lock()
-	hasAliveBots := false
+	// If ANY bots exist in the map (even connecting, not yet joined),
+	// orphan the session instead of destroying it. Bots may be in the
+	// middle of the connect pool handshake — killing the session would
+	// lose them permanently.
+	hasLiveBots := false
 	for _, b := range s.bots {
-		if b.IsAlive() && b.joinConfirmed.Load() {
-			hasAliveBots = true
+		if b.IsAlive() {
+			hasLiveBots = true
 			break
 		}
 	}
-	if hasAliveBots {
+	if hasLiveBots || len(s.bots) > 0 {
 		s.orphaned = true
-		color.New(color.FgYellow).Printf("[Session %s] Orphaned — %d bots still alive in room %s (keeping alive permanently)\n",
+		color.New(color.FgYellow).Printf("[Session %s] Orphaned — %d bots tracked in room %s (keeping alive)\n",
 			s.id, len(s.bots), s.room)
 		s.mu.Unlock()
 		return
 	}
 	s.mu.Unlock()
 
-	// No alive bots — full shutdown
+	// No bots — full shutdown
 	close(s.connectDone)
 	s.DestroyAllBots()
 	s.StopTurbo()

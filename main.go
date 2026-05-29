@@ -51,12 +51,37 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	room := r.URL.Query().Get("room")
 	session := GetOrCreateSession(ws, room)
 
+	// Handle pong responses to keep the connection alive through proxies.
+	ws.SetPongHandler(func(string) error {
+		ws.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return nil
+	})
+
 	red := color.New(color.FgRed)
 	boldRed := color.New(color.FgRed, color.Bold)
 
 	defer func() {
 		session.CloseConn(ws)
 		ws.Close()
+	}()
+
+	// WebSocket keepalive: send ping every 25s to prevent proxy/NAT timeouts.
+	// Many cloud reverse proxies (HostingGuru, etc.) drop idle WebSocket
+	// connections after 30-60s of inactivity.
+	go func() {
+		pingTicker := time.NewTicker(25 * time.Second)
+		defer pingTicker.Stop()
+		for {
+			select {
+			case <-pingTicker.C:
+				ws.SetWriteDeadline(time.Now().Add(5 * time.Second))
+				if err := ws.WriteControl(websocket.PingMessage, []byte("keepalive"), time.Now().Add(5*time.Second)); err != nil {
+					ws.SetWriteDeadline(time.Time{})
+					return
+				}
+				ws.SetWriteDeadline(time.Time{})
+			}
+		}
 	}()
 
 	// Read loop
