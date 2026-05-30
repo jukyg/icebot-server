@@ -118,6 +118,8 @@ var (
 	blockedMu          sync.RWMutex
 	blockedProxies     = make(map[string]time.Time)
 	proxyFailureCount  = make(map[string]int) // consecutive failures per IP
+	proxyScore         = make(map[string]int) // health score: higher = more reliable (capped ±100)
+	proxyTotalAttempts = make(map[string]int) // total pick count for scoring weight
 )
 
 // blockDuration is how long a proxy stays blocked before retrying.
@@ -128,26 +130,58 @@ const blockDuration = 10 * time.Second
 const maxConsecutiveFailuresBeforeEscalate = 3
 
 // pickProxyByIndex returns a residential proxy by round-robin index.
-// Does NOT check blocked state — used for deterministic initial assignment.
-// Formula: proxyIndex = botNumericId % totalProxies
+// Skips blocked proxies by scanning forward. Falls back to the original
+// index if all are blocked (may have recovered since the block was set).
 func pickProxyByIndex(index int) *ResidentialProxy {
-	idx := index % len(residentialProxies)
-	return &residentialProxies[idx]
+	total := len(residentialProxies)
+	if total == 0 {
+		return nil
+	}
+
+	blockedMu.RLock()
+	defer blockedMu.RUnlock()
+
+	now := time.Now()
+	start := index % total
+	for i := 0; i < total; i++ {
+		idx := (start + i) % total
+		p := &residentialProxies[idx]
+		blockedAt, isBlocked := blockedProxies[p.IP]
+		if !isBlocked || now.Sub(blockedAt) > blockDuration {
+			return p
+		}
+	}
+	// All blocked — return original index anyway
+	return &residentialProxies[start]
 }
 
-// pickProxy returns a random non-blocked residential proxy.
-// Falls back to any proxy if all are blocked.
+// pickProxy returns a random non-blocked residential proxy, weighted by
+// health score. Proxies with higher scores (more successes than failures)
+// are selected more often. Falls back to any proxy if all are blocked.
 func pickProxy() *ResidentialProxy {
 	blockedMu.RLock()
 	defer blockedMu.RUnlock()
 
 	now := time.Now()
 	var available []*ResidentialProxy
+	var weights []int
+	totalWeight := 0
 	for i := range residentialProxies {
 		p := &residentialProxies[i]
 		blockedAt, isBlocked := blockedProxies[p.IP]
 		if !isBlocked || now.Sub(blockedAt) > blockDuration {
 			available = append(available, p)
+			// Score-based weight: base 1 + score/25, minimum 1, maximum 5
+			score := proxyScore[p.IP]
+			w := 1 + score/25
+			if w < 1 {
+				w = 1
+			}
+			if w > 5 {
+				w = 5
+			}
+			weights = append(weights, w)
+			totalWeight += w
 		}
 	}
 
@@ -156,7 +190,16 @@ func pickProxy() *ResidentialProxy {
 		idx := rand.Intn(len(residentialProxies))
 		return &residentialProxies[idx]
 	}
-	return available[rand.Intn(len(available))]
+
+	// Weighted random selection
+	r := rand.Intn(totalWeight)
+	for i, w := range weights {
+		r -= w
+		if r < 0 {
+			return available[i]
+		}
+	}
+	return available[len(available)-1]
 }
 
 // pickProxySelection returns a ProxySelection for use by turbo.go.
@@ -187,14 +230,22 @@ func findProxyByIP(ip string) *ResidentialProxy {
 // a 5-minute block (same as markProxyBlocked429) so consistently dead
 // proxies are not retried every 10 seconds.
 func markProxyBlocked(ip string) {
+	host := ip
+	if h, _, err := net.SplitHostPort(ip); err == nil {
+		host = h
+	}
 	blockedMu.Lock()
-	proxyFailureCount[ip]++
-	failures := proxyFailureCount[ip]
+	proxyFailureCount[host]++
+	failures := proxyFailureCount[host]
+	proxyScore[host] -= 5
+	if proxyScore[host] < -100 {
+		proxyScore[host] = -100
+	}
 	if failures >= maxConsecutiveFailuresBeforeEscalate {
-		proxyFailureCount[ip] = 0
-		blockedProxies[ip] = time.Now().Add(5*time.Minute - blockDuration)
+		proxyFailureCount[host] = 0
+		blockedProxies[host] = time.Now().Add(5*time.Minute - blockDuration)
 	} else {
-		blockedProxies[ip] = time.Now()
+		blockedProxies[host] = time.Now()
 	}
 	blockedMu.Unlock()
 }
@@ -203,10 +254,18 @@ func markProxyBlocked(ip string) {
 // Auth can fail transiently due to provider rate-limiting. Blocks for 5 minutes
 // instead of permanently, so the proxy gets a chance to recover.
 func markProxyAuthFailed(ip string) {
+	host := ip
+	if h, _, err := net.SplitHostPort(ip); err == nil {
+		host = h
+	}
 	blockedMu.Lock()
-	proxyFailureCount[ip]++
+	proxyFailureCount[host]++
+	proxyScore[host] -= 10
+	if proxyScore[host] < -100 {
+		proxyScore[host] = -100
+	}
 	const longBlock = 5 * time.Minute
-	blockedProxies[ip] = time.Now().Add(longBlock - blockDuration)
+	blockedProxies[host] = time.Now().Add(longBlock - blockDuration)
 	blockedMu.Unlock()
 	fmt.Printf("  \x1b[33m⛔ Proxy %s blocked for 5m — authentication failed\x1b[0m\n", ip)
 }
@@ -214,12 +273,36 @@ func markProxyAuthFailed(ip string) {
 // markProxyBlocked429 blocks a proxy for 5 minutes (Cloudflare 429 / error 1015).
 // Works by back-dating the entry so the effective unblock time is 5 minutes from now.
 func markProxyBlocked429(ip string) {
+	host := ip
+	if h, _, err := net.SplitHostPort(ip); err == nil {
+		host = h
+	}
 	const longBlock = 5 * time.Minute
 	blockedMu.Lock()
+	proxyScore[host] -= 15
+	if proxyScore[host] < -100 {
+		proxyScore[host] = -100
+	}
 	// pickProxy unblocks when: now.Sub(blockedAt) > blockDuration(10s)
 	// To block for longBlock(5min), set blockedAt = now + (longBlock - blockDuration)
 	// so the proxy stays blocked until now + longBlock.
-	blockedProxies[ip] = time.Now().Add(longBlock - blockDuration)
+	blockedProxies[host] = time.Now().Add(longBlock - blockDuration)
+	blockedMu.Unlock()
+}
+
+// markProxySuccess increases the health score of a proxy (called on successful join).
+// Score is capped at +100 to prevent old data from dominating.
+func markProxySuccess(ip string) {
+	host := ip
+	if h, _, err := net.SplitHostPort(ip); err == nil {
+		host = h
+	}
+	blockedMu.Lock()
+	proxyTotalAttempts[host]++
+	proxyScore[host] += 10
+	if proxyScore[host] > 100 {
+		proxyScore[host] = 100
+	}
 	blockedMu.Unlock()
 }
 
@@ -234,23 +317,38 @@ func unblockProxy(ip string) {
 	blockedMu.Lock()
 	delete(blockedProxies, host)
 	delete(proxyFailureCount, host)
+	proxyScore[host] += 5 // gradual recovery bonus on unblock
+	if proxyScore[host] > 100 {
+		proxyScore[host] = 100
+	}
 	blockedMu.Unlock()
 }
 
 // releaseDirectSlot is a no-op placeholder for TierDirect compatibility.
 func releaseDirectSlot() {}
 
-// proxyResetLoop runs every 60 seconds and clears all blocked proxy entries,
-// allowing blocked proxies to recover and cycle back into the pool automatically.
+// proxyResetLoop runs every 60 seconds and removes only proxies whose block
+// has expired (handles the 10s default block). Proxies escalated to 5-minute
+// blocks (3+ consecutive failures) are preserved — they stay blocked until
+// the full duration expires. This prevents repeatedly retrying a dead proxy.
 func proxyResetLoop() {
 	for {
 		time.Sleep(60 * time.Second)
 		blockedMu.Lock()
-		blockedProxies = make(map[string]time.Time)
-		proxyFailureCount = make(map[string]int)
+		now := time.Now()
+		for ip, blockedAt := range blockedProxies {
+			if now.Sub(blockedAt) > blockDuration {
+				delete(blockedProxies, ip)
+				delete(proxyFailureCount, ip)
+				// Score persists — decays naturally via markProxyBlocked calls
+				// if the proxy is still problematic; otherwise it stays positive.
+			}
+		}
+		total := len(blockedProxies)
 		blockedMu.Unlock()
-		color.New(color.FgHiCyan).Println("[Proxy Reset] All proxies unblocked and recycled into pool")
-		LogInfo("Proxy", "All proxies unblocked — auto-reset cycle")
+		if total > 0 {
+			color.New(color.FgHiCyan).Printf("[Proxy Reset] %d proxies still blocked (escalated), expired entries cleaned\n", total)
+		}
 	}
 }
 

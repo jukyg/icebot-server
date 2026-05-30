@@ -25,6 +25,11 @@ import (
 var blankZero = "\u2800"
 var blankOne = "\u3164"
 
+// proxyFailures tracks consecutive disconnect failures per proxy IP.
+// After N failures the proxy is rotated (blocked) so new connections
+// pick a fresh proxy instead of reusing a dead one.
+var proxyFailures sync.Map // map[string]int
+
 // sanitizeNick removes invisible suffix characters from a nickname for log
 // display. The invisible characters (U+2800, U+3164) used in nick generation
 // render as garbled Unicode in terminals and log files.
@@ -54,6 +59,7 @@ type Bot struct {
 	joinConfirmed  atomic.Bool
 	joinedAt       time.Time
 	exitedManually atomic.Bool
+	lastMsg        atomic.Int64
 	cancel         context.CancelFunc
 }
 
@@ -195,14 +201,27 @@ func botConnectViaProxy(s *Session, bot *Bot, botNumId int, room, nick, finalAva
 	green := color.New(color.FgGreen)
 	red := color.New(color.FgRed)
 
+	// Overall connect timeout: give up after 120s instead of trying every proxy.
+	// If all proxies are blocked this prevents a 50-worker pileup on retries.
+	connectCtx, connectCancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer connectCancel()
+
 	var lastErr error
 	totalProxies := len(residentialProxies)
+	maxAttempts := totalProxies
+	if maxAttempts > 5 {
+		maxAttempts = 5 // limit to 5 proxy attempts per bot connect
+	}
 	if totalProxies == 0 {
 		removeBotOnFail(s, bot, botNumId, "no_proxy_available")
 		return
 	}
 
-	for attempt := 1; attempt <= totalProxies; attempt++ {
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if connectCtx.Err() != nil {
+			lastErr = connectCtx.Err()
+			break
+		}
 		proxy := pickProxyByIndex(botNumId + attempt - 1)
 		bot.proxyIp = proxy.Address()
 		bot.proxyTier = TierResidential
@@ -222,7 +241,7 @@ func botConnectViaProxy(s *Session, bot *Bot, botNumId int, room, nick, finalAva
 		}
 
 		proxyClient := newProxiedHTTPClient(proxy)
-		fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 8*time.Second)
+		fetchCtx, fetchCancel := context.WithTimeout(connectCtx, 8*time.Second)
 		req, err := http.NewRequestWithContext(fetchCtx, "GET", fetchURL, nil)
 		if err != nil {
 			fetchCancel()
@@ -669,10 +688,32 @@ func botMessageLoop(ctx context.Context, s *Session, bot *Bot, botNumId int, roo
 
 	ws := bot.ws
 	ws.SetReadLimit(4 << 20) // 4MB max message
-	ws.SetPongHandler(func(string) error {
-		ws.SetReadDeadline(time.Now().Add(180 * time.Second))
-		return nil
+	ws.SetPingHandler(func(data string) error {
+		ws.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return ws.WriteControl(websocket.PongMessage,
+			[]byte(data), time.Now().Add(4*time.Second))
 	})
+	ws.SetReadDeadline(time.Now().Add(60 * time.Second))
+
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(20 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				deadline := time.Now().Add(4 * time.Second)
+				if err := ws.WriteControl(websocket.PingMessage,
+					nil, deadline); err != nil {
+					return
+				}
+				ws.SetReadDeadline(time.Now().Add(60 * time.Second))
+			case <-done:
+				return
+			}
+		}
+	}()
+	defer close(done)
 	defer func() {
 		// Release premium proxy slot
 		if bot.premiumProxy != nil {
@@ -691,6 +732,15 @@ func botMessageLoop(ctx context.Context, s *Session, bot *Bot, botNumId int, roo
 			}
 			red.Printf("  Bot %d (%s) disconnected — uptime=%ds proxy=%s joined=%v\n",
 				botNumId, sanitizeNick(displayNick), uptime, bot.proxyIp, bot.joinConfirmed.Load())
+		}
+
+		// Rotate proxy after repeated failures
+		if bot.proxyIp != "" && bot.joinConfirmed.Load() {
+			proxyIP := bot.proxyIp
+			if shouldRotateProxy(proxyIP) {
+				color.New(color.FgYellow).Printf("  Bot %d: proxy %s failed 3 times — blocking for 20m\n", botNumId, proxyIP)
+				markProxyBlocked(proxyIP)
+			}
 		}
 
 		if bot.exitedManually.Load() {
@@ -844,12 +894,14 @@ func botMessageLoop(ctx context.Context, s *Session, bot *Bot, botNumId int, roo
 			msg = pendingMsg
 			pendingMsg = ""
 		} else {
-			ws.SetReadDeadline(time.Now().Add(180 * time.Second))
+			ws.SetReadDeadline(time.Now().Add(60 * time.Second))
 			_, raw, err := ws.ReadMessage()
 			if err != nil {
 				return
 			}
 			msg = string(raw)
+			ws.SetReadDeadline(time.Now().Add(60 * time.Second))
+			bot.lastMsg.Store(time.Now().Unix())
 		}
 
 		// Socket.io handshake
@@ -883,9 +935,11 @@ func botMessageLoop(ctx context.Context, s *Session, bot *Bot, botNumId int, roo
 			continue
 		}
 
-		// Heartbeat ping
+		// Socket.io application-level heartbeat — MUST reply instantly
 		if msg == "2" {
-			bot.SendRaw("3")
+			ws.SetWriteDeadline(time.Now().Add(5 * time.Second))
+			ws.WriteMessage(websocket.TextMessage, []byte("3"))
+			ws.SetReadDeadline(time.Now().Add(60 * time.Second))
 			continue
 		}
 
@@ -914,6 +968,8 @@ func botMessageLoop(ctx context.Context, s *Session, bot *Bot, botNumId int, roo
 			bot.joinedAt = time.Now()
 			joinTimer.Stop()
 			unblockProxy(bot.proxyIp)
+			markProxySuccess(bot.proxyIp)
+			s.resetRejoinBackoff()
 			atomic.StoreInt32(&s.consecutiveRoomFull, 0)
 			LogSuccess("Bot", fmt.Sprintf("Bot #%d (%s) joined room %s [garticId=%d]", botNumId, bot.nick, room, bot.garticId.Load()))
 
@@ -1156,6 +1212,19 @@ func botMessageLoop(ctx context.Context, s *Session, bot *Bot, botNumId int, roo
 			// Manual report is still available via the REPORT button.
 		}
 	}
+}
+
+// shouldRotateProxy tracks consecutive failures per proxy and returns
+// true when a proxy should be rotated (blocked) after 3+ failures.
+func shouldRotateProxy(proxy string) bool {
+	val, _ := proxyFailures.LoadOrStore(proxy, 0)
+	count := val.(int) + 1
+	proxyFailures.Store(proxy, count)
+	if count >= 3 {
+		proxyFailures.Delete(proxy)
+		return true
+	}
+	return false
 }
 
 func removeBotOnFail(s *Session, bot *Bot, botNumId int, reason string) {

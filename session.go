@@ -92,8 +92,9 @@ type Session struct {
 
 	// Rejoin throttle: prevents auto-rejoin storms when multiple bots
 	// disconnect simultaneously. Only one rejoin operation runs at a time,
-	// with a minimum 500ms interval between them.
+	// with exponential backoff on repeated failures.
 	rejoinInProgress atomic.Bool
+	rejoinBackoff    atomic.Int64 // nanoseconds, doubles on each failed attempt
 
 	// Turbo mode fields
 	turboMu           sync.Mutex
@@ -111,6 +112,58 @@ var (
 	sessionsMu sync.RWMutex
 	sessions   = make(map[string]*Session)
 )
+
+// keepBotsAlive monitors the session and relaunches bots whenever all of
+// them die while autoRejoin is enabled.  Run once per session with:
+//   go s.keepBotsAlive()
+func (s *Session) keepBotsAlive() {
+	ticker := time.NewTicker(90 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		if !s.autoRejoin.Load() {
+			continue
+		}
+
+		// Detect and kill stale bots (no message received in 2+ minutes)
+		now := time.Now().Unix()
+		var staleBots []*Bot
+		s.mu.RLock()
+		for _, b := range s.bots {
+			last := b.lastMsg.Load()
+			if last > 0 && now-last > 120 {
+				staleBots = append(staleBots, b)
+			}
+		}
+		s.mu.RUnlock()
+		for _, b := range staleBots {
+			color.New(color.FgYellow).Printf("[keepBotsAlive] Killing stale bot %d (room=%s) — last msg %ds ago\n",
+				b.numericId, s.room, now-b.lastMsg.Load())
+			b.Destroy()
+		}
+
+		s.mu.RLock()
+		alive := 0
+		for _, b := range s.bots {
+			if b.IsAlive() && b.joinConfirmed.Load() {
+				alive++
+			}
+		}
+		cfg := s.autoRejoinConfig
+		s.mu.RUnlock()
+
+		if alive > 0 || cfg == nil || cfg.Room == "" {
+			continue
+		}
+
+		if s.tryBeginRejoin() {
+			color.New(color.FgCyan).Printf("[keepBotsAlive] Room %s: no alive bots — relaunching\n", cfg.Room)
+			go func(c *AutoJoinConfig) {
+				defer s.endRejoin()
+				s.startRejoinAutoJoin(c)
+			}(cfg)
+		}
+	}
+}
 
 // GetOrCreateSession retrieves an existing session by room code, or creates one if not found.
 // IMPORTANT: This now matches orphaned sessions too, so when the user leaves the room
@@ -172,6 +225,7 @@ func GetOrCreateSession(ws *websocket.Conn, room string) *Session {
 	}
 
 	sessions[id] = s
+	go s.keepBotsAlive()
 	color.New(color.FgHiCyan).Printf("[Session %s] Created (room=%s)\n", id, room)
 
 	// Restore any previously saved settings for this room so the owner's
@@ -310,22 +364,42 @@ func (s *Session) electReporterLocked() {
 }
 
 // tryBeginRejoin attempts to start a rejoin operation.
-// Returns true only if no other rejoin is in progress AND
-// at least 500ms have elapsed since the last rejoin.
+// Returns true only if no other rejoin is in progress AND enough time
+// has elapsed since the last attempt. Uses exponential backoff:
+//   1st retry: 3s   2nd: 6s   3rd: 12s   4th: 24s   5th+: 60s
+// Reset on successful bot join (see case "5" in botMessageLoop).
 func (s *Session) tryBeginRejoin() bool {
 	if !s.rejoinInProgress.CompareAndSwap(false, true) {
 		return false
 	}
 	s.mu.Lock()
-		since := time.Since(s.lastAutoRejoinTime)
-	if since < 3*time.Second {
+	since := time.Since(s.lastAutoRejoinTime)
+	backoff := time.Duration(s.rejoinBackoff.Load())
+	if backoff == 0 {
+		backoff = 3 * time.Second
+	}
+	if since < backoff {
 		s.mu.Unlock()
 		s.rejoinInProgress.Store(false)
 		return false
 	}
 	s.lastAutoRejoinTime = time.Now()
+	// Double backoff for next attempt (cap at 60s)
+	next := backoff * 2
+	if next > 60*time.Second {
+		next = 60 * time.Second
+	}
+	s.rejoinBackoff.Store(int64(next))
 	s.mu.Unlock()
 	return true
+}
+
+// resetRejoinBackoff clears the rejoin backoff to minimum (3s).
+// Called whenever a bot successfully joins the room.
+func (s *Session) resetRejoinBackoff() {
+	s.mu.Lock()
+	s.rejoinBackoff.Store(int64(3 * time.Second))
+	s.mu.Unlock()
 }
 
 // endRejoin releases the rejoin throttle.

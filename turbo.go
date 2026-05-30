@@ -349,10 +349,32 @@ func turboStartReadLoop(s *Session, entry *TurboEntry, ctx context.Context) {
 
 	ws := entry.ws
 	ws.SetReadLimit(4 << 20)
-	ws.SetPongHandler(func(string) error {
-		ws.SetReadDeadline(time.Now().Add(120 * time.Second))
-		return nil
+	ws.SetPingHandler(func(data string) error {
+		ws.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return ws.WriteControl(websocket.PongMessage,
+			[]byte(data), time.Now().Add(4*time.Second))
 	})
+	ws.SetReadDeadline(time.Now().Add(60 * time.Second))
+
+	turboDone := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(20 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				deadline := time.Now().Add(4 * time.Second)
+				if err := ws.WriteControl(websocket.PingMessage,
+					nil, deadline); err != nil {
+					return
+				}
+				ws.SetReadDeadline(time.Now().Add(60 * time.Second))
+			case <-turboDone:
+				return
+			}
+		}
+	}()
+	defer close(turboDone)
 
 	for {
 		select {
@@ -361,12 +383,13 @@ func turboStartReadLoop(s *Session, entry *TurboEntry, ctx context.Context) {
 		default:
 		}
 
-		ws.SetReadDeadline(time.Now().Add(120 * time.Second))
+		ws.SetReadDeadline(time.Now().Add(60 * time.Second))
 		_, raw, err := ws.ReadMessage()
 		if err != nil {
 			return
 		}
 		msg := string(raw)
+		ws.SetReadDeadline(time.Now().Add(60 * time.Second))
 
 		// Check if this entry has been activated (consumed for a join)
 		if entry.activated.Load() {
@@ -389,9 +412,11 @@ func turboStartReadLoop(s *Session, entry *TurboEntry, ctx context.Context) {
 			continue
 		}
 
-		// Heartbeat ping
+		// Socket.io application-level heartbeat — MUST reply instantly
 		if msg == "2" {
-			entry.sendRaw("3")
+			ws.SetWriteDeadline(time.Now().Add(5 * time.Second))
+			ws.WriteMessage(websocket.TextMessage, []byte("3"))
+			ws.SetReadDeadline(time.Now().Add(60 * time.Second))
 			continue
 		}
 	}
