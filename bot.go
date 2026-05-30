@@ -785,37 +785,46 @@ func botMessageLoop(ctx context.Context, s *Session, bot *Bot, botNumId int, roo
 		// This preserves the normal manual-join flow: if a bot fails during
 		// the initial handshake it does NOT trigger startRejoinAutoJoin, which
 		// would otherwise conflict with the user's in-progress join attempt.
-		// Throttled via tryBeginRejoin so only one rejoin runs at a time.
+		// CRITICAL: tryBeginRejoin/endRejoin MUST be in the SAME goroutine.
+		// Previously defer s.endRejoin() ran when the outer closure returned,
+		// releasing the lock before the async goroutine even started — causing
+		// a rejoin storm where every bot's defer spawned a new rejoin attempt.
 		if wasJoined && autoRejoinOn && !isAutoJoining {
-			if s.tryBeginRejoin() {
-				defer s.endRejoin()
+			s.mu.RLock()
+			cfg := s.autoRejoinConfig
+			s.mu.RUnlock()
+			if cfg != nil && cfg.Idioma == "" {
+				qty := cfg.Target
+				if qty <= 0 {
+					qty = 1
+				}
 				s.mu.RLock()
-				cfg := s.autoRejoinConfig
+				joinedRemaining := 0
+				for _, b := range s.bots {
+					if b.joinConfirmed.Load() {
+						joinedRemaining++
+					}
+				}
 				s.mu.RUnlock()
-				if cfg != nil && cfg.Idioma == "" {
-					qty := cfg.Target
-					if qty <= 0 {
-						qty = 1
-					}
-					// Count remaining joined bots to decide restart vs. top-up
-					joinedRemaining := 0
-					s.mu.RLock()
-					for _, b := range s.bots {
-						if b.joinConfirmed.Load() {
-							joinedRemaining++
+				if joinedRemaining == 0 {
+					cyan.Printf("[auto-rejoin] Bot died, no observers — starting autojoin (room=%s)\n", cfg.Room)
+					go func() {
+						if !s.tryBeginRejoin() {
+							return
 						}
-					}
-					s.mu.RUnlock()
-					if joinedRemaining == 0 {
-						cyan.Printf("[auto-rejoin] Bot died, no observers — starting autojoin (room=%s)\n", cfg.Room)
-						go s.startRejoinAutoJoin(cfg)
-					} else {
-						cyan.Printf("[auto-rejoin] Bot died — dupe join x%d (room=%s)\n", qty, cfg.Room)
-						go func() {
-							time.Sleep(time.Duration(2000+rand.Intn(3000)) * time.Millisecond)
-							s.joinWithTurbo(cfg, qty)
-						}()
-					}
+						defer s.endRejoin()
+						s.startRejoinAutoJoin(cfg)
+					}()
+				} else {
+					cyan.Printf("[auto-rejoin] Bot died — dupe join x%d (room=%s)\n", qty, cfg.Room)
+					go func() {
+						if !s.tryBeginRejoin() {
+							return
+						}
+						defer s.endRejoin()
+						time.Sleep(time.Duration(2000+rand.Intn(3000)) * time.Millisecond)
+						s.joinWithTurbo(cfg, qty)
+					}()
 				}
 			}
 		}
@@ -1051,17 +1060,20 @@ func botMessageLoop(ctx context.Context, s *Session, bot *Bot, botNumId int, roo
 					cfg := s.autoRejoinConfig
 					isOrph := s.orphaned
 					s.mu.RUnlock()
-					if isOrph && cfg != nil && cfg.Idioma == "" && s.tryBeginRejoin() {
+					if isOrph && cfg != nil && cfg.Idioma == "" {
 						qty := cfg.Target
 						if qty <= 0 {
 							qty = 1
 						}
 						cyan.Printf("[auto-rejoin] User left — dupe join x%d (room=%s)\n", qty, room)
-						go func() {
+						go func(cfg *AutoJoinConfig, qty int) {
+							if !s.tryBeginRejoin() {
+								return
+							}
+							defer s.endRejoin()
 							time.Sleep(time.Duration(2000+rand.Intn(3000)) * time.Millisecond)
 							s.joinWithTurbo(cfg, qty)
-							s.endRejoin()
-						}()
+						}(cfg, qty)
 					}
 				}
 			}
@@ -1185,17 +1197,20 @@ func botMessageLoop(ctx context.Context, s *Session, bot *Bot, botNumId int, roo
 					s.mu.RLock()
 					cfg := s.autoRejoinConfig
 					s.mu.RUnlock()
-					if cfg != nil && cfg.Idioma == "" && s.tryBeginRejoin() {
+					if cfg != nil && cfg.Idioma == "" {
 						qty := cfg.Target
 						if qty <= 0 {
 							qty = 1
 						}
 						cyan.Printf("[auto-rejoin] Bot kicked — dupe join x%d (room=%s)\n", qty, room)
-						go func() {
+						go func(cfg *AutoJoinConfig, qty int) {
+							if !s.tryBeginRejoin() {
+								return
+							}
+							defer s.endRejoin()
 							time.Sleep(time.Duration(2000+rand.Intn(3000)) * time.Millisecond)
 							s.joinWithTurbo(cfg, qty)
-							s.endRejoin()
-						}()
+						}(cfg, qty)
 					}
 				}
 			}

@@ -155,13 +155,14 @@ func (s *Session) keepBotsAlive() {
 			continue
 		}
 
-		if s.tryBeginRejoin() {
-			color.New(color.FgCyan).Printf("[keepBotsAlive] Room %s: no alive bots — relaunching\n", cfg.Room)
-			go func(c *AutoJoinConfig) {
-				defer s.endRejoin()
-				s.startRejoinAutoJoin(c)
-			}(cfg)
-		}
+		go func(c *AutoJoinConfig) {
+			if !s.tryBeginRejoin() {
+				return
+			}
+			defer s.endRejoin()
+			color.New(color.FgCyan).Printf("[keepBotsAlive] Room %s: no alive bots — relaunching\n", c.Room)
+			s.startRejoinAutoJoin(c)
+		}(cfg)
 	}
 }
 
