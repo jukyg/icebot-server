@@ -1,0 +1,117 @@
+{
+  "49e1OO": {
+    "room": "49e1OO",
+    "autoRejoin": true,
+    "autoRejoinCfg": {
+      "Room": "49e1OO",
+      "Name": "ˢᵃᶤᶠ ₉₁",
+      "Nick": "ˢᵃᶤᶠ ₉₁",
+      "NickMode": "0",
+      "CustomNicks": [],
+      "Avatar": "0",
+      "JoinMessages": [],
+      "ServerOverride": "",
+      "Server": "",
+      "Target": 5,
+      "Idioma": ""
+    },
+    "autofarm": false,
+    "privateMode": true,
+    "answerReveal": false,
+    "rejoin": false,
+    "keepEmpty": true,
+    "keepEmptyCount": 1
+  },
+  "49k5w6": {
+    "room": "49k5w6",
+    "autoRejoin": true,
+    "autoRejoinCfg": {
+      "Room": "49k5w6",
+      "Name": "ˢᵃᶤᶠ ₉₁",
+      "Nick": "ˢᵃᶤᶠ ₉₁",
+      "NickMode": "0",
+      "CustomNicks": [],
+      "Avatar": "0",
+      "JoinMessages": [],
+      "ServerOverride": "",
+      "Server": "",
+      "Target": 10,
+      "Idioma": ""
+    },
+    "autofarm": false,
+    "privateMode": true,
+    "answerReveal": true,
+    "rejoin": false,
+    "keepEmpty": false,
+    "keepEmptyCount": 0
+  },
+  "49q25p": {
+    "room": "49q25p",
+    "autoRejoin": true,
+    "autoRejoinCfg": {
+      "Room": "49q25p",
+      "Name": "ˢᵃᶤᶠ ₉₁",
+      "Nick": "ˢᵃᶤᶠ ₉₁",
+      "NickMode": "0",
+      "CustomNicks": [],
+      "Avatar": "0",
+      "JoinMessages": [],
+      "ServerOverride": "",
+      "Server": "",
+      "Target": 5,
+      "Idioma": ""
+    },
+    "autofarm": false,
+    "privateMode": true,
+    "answerReveal": false,
+    "rejoin": false,
+    "keepEmpty": false,
+    "keepEmptyCount": 0
+  },
+  "49uUM": {
+    "room": "49uUM",
+    "autoRejoin": true,
+    "autoRejoinCfg": {
+      "Room": "49uUM",
+      "Name": "ˢᵃᶤᶠ ₉₁",
+      "Nick": "ˢᵃᶤᶠ ₉₁",
+      "NickMode": "0",
+      "CustomNicks": [],
+      "Avatar": "0",
+      "JoinMessages": [],
+      "ServerOverride": "",
+      "Server": "",
+      "Target": 10,
+      "Idioma": ""
+    },
+    "autofarm": false,
+    "privateMode": true,
+    "answerReveal": false,
+    "rejoin": false,
+    "keepEmpty": false,
+    "keepEmptyCount": 0
+  },
+  "rooms": {
+    "room": "rooms",
+    "autoRejoin": false,
+    "autoRejoinCfg": {
+      "Room": "49q25p",
+      "Name": "ˢᵃᶤᶠ ₉₁",
+      "Nick": "ˢᵃᶤᶠ ₉₁",
+      "NickMode": "0",
+      "CustomNicks": [],
+      "Avatar": "0",
+      "JoinMessages": [],
+      "ServerOverride": "",
+      "Server": "",
+      "Target": 5,
+      "Idioma": ""
+    },
+    "autofarm": false,
+    "privateMode": true,
+    "answerReveal": true,
+    "rejoin": false,
+    "keepEmpty": false,
+    "keepEmptyCount": 1
+  }
+}

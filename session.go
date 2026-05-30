@@ -48,90 +48,17 @@ var (
 	keepEmptyMu     sync.RWMutex
 )
 
-// RoomSettings persists room-level options across reconnections.
-// When a user activates any option in a room, it's saved here.
-// When they return to the same room, all saved options are restored.
-type RoomSettings struct {
-	AutoRejoin   bool
-	Autofarm     bool
-	PrivateMode  bool
-	AnswerReveal bool
-	Rejoin       bool
-	KeepEmpty    bool
-	KeepEmptyCount int
-	AutoRejoinConfig *AutoJoinConfig
-}
+// MaxWSConns limits the number of concurrent WebSocket connections per session
+// to prevent resource exhaustion from rapid page reloads.
+const maxWSConns = 10
 
-var (
-	roomSettingsMu sync.RWMutex
-	roomSettings   = make(map[string]*RoomSettings)
-)
-
-// SaveRoomSettings persists the current room options.
-func SaveRoomSettings(room string, s *Session) {
-	if room == "" {
-		return
-	}
-	s.mu.RLock()
-	settings := &RoomSettings{
-		AutoRejoin:       s.autoRejoin.Load(),
-		Autofarm:         s.autofarm,
-		PrivateMode:      s.privateMode,
-		AnswerReveal:     s.answerReveal,
-		AutoRejoinConfig: s.autoRejoinConfig,
-	}
-	s.mu.RUnlock()
-
-	rejoinMu.RLock()
-	settings.Rejoin = rejoinRooms[room]
-	rejoinMu.RUnlock()
-
-	keepEmptyMu.RLock()
-	settings.KeepEmpty = keepEmptyRooms[room]
-	settings.KeepEmptyCount = keepEmptyCounts[room]
-	keepEmptyMu.RUnlock()
-
-	roomSettingsMu.Lock()
-	roomSettings[room] = settings
-	roomSettingsMu.Unlock()
-}
-
-// RestoreRoomSettings loads saved room options into a session.
-func RestoreRoomSettings(room string, s *Session) {
-	if room == "" {
-		return
-	}
-	roomSettingsMu.RLock()
-	saved, ok := roomSettings[room]
-	roomSettingsMu.RUnlock()
-	if !ok {
-		return
-	}
-
-	s.autoRejoin.Store(saved.AutoRejoin)
-	s.mu.Lock()
-	s.autofarm = saved.Autofarm
-	s.privateMode = saved.PrivateMode
-	s.answerReveal = saved.AnswerReveal
-	if saved.AutoRejoinConfig != nil {
-		s.autoRejoinConfig = saved.AutoRejoinConfig
-	}
-	s.mu.Unlock()
-
-	rejoinMu.Lock()
-	rejoinRooms[room] = saved.Rejoin
-	rejoinMu.Unlock()
-
-	keepEmptyMu.Lock()
-	keepEmptyRooms[room] = saved.KeepEmpty
-	keepEmptyCounts[room] = saved.KeepEmptyCount
-	keepEmptyMu.Unlock()
-}
-
-// Session manages a single extension ↔ server connection.
+// Session manages an extension ↔ server connection. Supports multiple
+// concurrent WebSocket connections (fan-out) so browser tabs monitoring
+// the same room do not trigger reconnection loops — each tab's WS is
+// added to wsSet and removed when the tab closes.
 type Session struct {
 	id                 string
-	ws                 *websocket.Conn
+	wsSet              map[*websocket.Conn]bool
 	wsMu               sync.Mutex
 	mu                 sync.RWMutex
 	bots               map[int]*Bot
@@ -145,8 +72,6 @@ type Session struct {
 	autofarm           bool
 	privateMode        bool
 	answerReveal       bool
-	isOwner            bool
-
 
 	currentDrawerId    atomic.Int64
 	currentDrawWord    string
@@ -164,10 +89,6 @@ type Session struct {
 	consecutiveRoomFull int32
 
 	createdAt          time.Time
-
-	// Reattachment throttle: prevents rapid reconnection loops when the
-	// extension's WebSocket keeps getting dropped by infrastructure.
-	lastReattachTime   time.Time
 
 	// Rejoin throttle: prevents auto-rejoin storms when multiple bots
 	// disconnect simultaneously. Only one rejoin operation runs at a time,
@@ -227,7 +148,7 @@ func GetOrCreateSession(ws *websocket.Conn, room string) *Session {
 	id := fmt.Sprintf("s_%d_%d", time.Now().UnixMilli(), rand.Intn(10000))
 	s := &Session{
 		id:          id,
-		ws:          ws,
+		wsSet:       map[*websocket.Conn]bool{ws: true},
 		bots:        make(map[int]*Bot),
 		room:        room,
 		srvCache:    &ServerInfoCache{},
@@ -253,8 +174,10 @@ func GetOrCreateSession(ws *websocket.Conn, room string) *Session {
 	sessions[id] = s
 	color.New(color.FgHiCyan).Printf("[Session %s] Created (room=%s)\n", id, room)
 
-	// Restore saved room settings from previous session
-	RestoreRoomSettings(room, s)
+	// Restore any previously saved settings for this room so the owner's
+	// options (autofarm, privateMode, autoRejoin target, etc.) come back
+	// automatically when they return to the same room.
+	ApplyRoomPersist(s)
 
 	s.mu.RLock()
 	af := s.autofarm
@@ -262,25 +185,14 @@ func GetOrCreateSession(ws *websocket.Conn, room string) *Session {
 	ar := s.answerReveal
 	s.mu.RUnlock()
 
-	rejoinMu.RLock()
-	rj := rejoinRooms[s.room]
-	rejoinMu.RUnlock()
-	keepEmptyMu.RLock()
-	ke := keepEmptyRooms[s.room]
-	kc := keepEmptyCounts[s.room]
-	keepEmptyMu.RUnlock()
-
 	s.Send(map[string]interface{}{
-		"event":          "sessionCreated",
-		"sessionId":      id,
-		"marked":         s.marked,
-		"autoRejoin":     s.autoRejoin.Load(),
-		"autofarm":       af,
-		"privateMode":    pm,
-		"answerReveal":   ar,
-		"rejoin":         rj,
-		"keepEmpty":      ke,
-		"keepEmptyCount": kc,
+		"event":        "sessionCreated",
+		"sessionId":    id,
+		"marked":       s.marked,
+		"autoRejoin":   s.autoRejoin.Load(),
+		"autofarm":     af,
+		"privateMode":  pm,
+		"answerReveal": ar,
 	})
 
 	return s
@@ -300,29 +212,78 @@ func (s *Session) connectWorker() {
 	}
 }
 
-// Send sends a JSON event to the connected extension.
+// Send broadcasts a JSON event to ALL active extension connections (fan-out).
+// Writes are serialized per-connection by the gorilla library's internal mutex;
+// the wsMu prevents interleaving across connections during broadcast.
 func (s *Session) Send(event map[string]interface{}) {
 	s.wsMu.Lock()
 	defer s.wsMu.Unlock()
-	if s.ws == nil {
+	if len(s.wsSet) == 0 {
 		return
 	}
 	data, err := json.Marshal(event)
 	if err != nil {
 		return
 	}
-	s.ws.SetWriteDeadline(time.Now().Add(5 * time.Second))
-	s.ws.WriteMessage(websocket.TextMessage, data)
-	s.ws.SetWriteDeadline(time.Time{})
+	for ws := range s.wsSet {
+		ws.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		ws.WriteMessage(websocket.TextMessage, data)
+		ws.SetWriteDeadline(time.Time{})
+	}
 }
 
-// SendGameEvent forwards an event only from the reporter bot.
+// sendTo sends a JSON event to a single WebSocket connection (bypasses fan-out).
+// Used during reattachment to initialize the new tab without re-syncing existing tabs.
+func (s *Session) sendTo(ws *websocket.Conn, event map[string]interface{}) {
+	data, err := json.Marshal(event)
+	if err != nil {
+		return
+	}
+	ws.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	ws.WriteMessage(websocket.TextMessage, data)
+	ws.SetWriteDeadline(time.Time{})
+}
+
+// SendGameEvent forwards an event from the reporter bot to ALL active sessions
+// monitoring the same room. This ensures bots deployed via admin/auto-deploy
+// (which may be in a headless session with no WebSocket) still reach any user
+// who is actively monitoring the room.
 func (s *Session) SendGameEvent(botNumId int, event map[string]interface{}) {
 	s.mu.RLock()
 	reporter := s.reporterBotId
+	room := s.room
 	s.mu.RUnlock()
-	if botNumId == reporter {
-		s.Send(event)
+	if botNumId != reporter {
+		return
+	}
+	// Always send to our own session first
+	s.Send(event)
+	if room == "" {
+		return
+	}
+	// Broadcast to all other sessions with live WebSockets for the same room
+	sessionsMu.RLock()
+	var targets []*Session
+	for _, other := range sessions {
+		if other == s {
+			continue
+		}
+		other.mu.RLock()
+		match := other.room == room && !other.orphaned
+		other.mu.RUnlock()
+		if !match {
+			continue
+		}
+		other.wsMu.Lock()
+		hasWS := len(other.wsSet) > 0
+		other.wsMu.Unlock()
+		if hasWS {
+			targets = append(targets, other)
+		}
+	}
+	sessionsMu.RUnlock()
+	for _, t := range targets {
+		t.Send(event)
 	}
 }
 
@@ -406,32 +367,27 @@ func (s *Session) GetBotList() []map[string]interface{} {
 	return list
 }
 
-// Reattach binds a new WebSocket to this session (e.g. on page refresh).
-// Throttled to prevent rapid reconnection loops.
+// Reattach binds a new WebSocket to this session (e.g. on page refresh or new tab).
+// Unlike the old single-connection approach, this ADDS the connection to the set
+// without closing existing ones — preventing cross-tab reconnection loops.
 func (s *Session) Reattach(ws *websocket.Conn) {
 	s.wsMu.Lock()
-	// Rate limit: if last reattach was <1s ago, reject and close the new WS.
-	// The extension will retry, but this prevents the tight error loop.
-	if time.Since(s.lastReattachTime) < 1*time.Second {
+	if len(s.wsSet) >= maxWSConns {
 		s.wsMu.Unlock()
-		color.New(color.FgYellow).Printf("[Session %s] Reattachment throttled — too fast\n", s.id)
+		color.New(color.FgYellow).Printf("[Session %s] Reattachment rejected — too many connections (%d)\n", s.id, maxWSConns)
 		ws.Close()
 		return
 	}
-	s.lastReattachTime = time.Now()
-	oldWs := s.ws
-	s.ws = ws
+	s.wsSet[ws] = true
+	totalConns := len(s.wsSet)
 	s.wsMu.Unlock()
-
-	if oldWs != nil {
-		oldWs.Close()
-	}
 
 	s.mu.Lock()
 	s.orphaned = false
 	s.mu.Unlock()
 
-	color.New(color.FgHiGreen).Printf("[Session %s] Reattached successfully! Syncing %d bots...\n", s.id, len(s.bots))
+	color.New(color.FgHiGreen).Printf("[Session %s] New connection added (total %d connections). Syncing %d bots...\n",
+		s.id, totalConns, len(s.bots))
 
 	s.mu.RLock()
 	af := s.autofarm
@@ -447,7 +403,8 @@ func (s *Session) Reattach(ws *websocket.Conn) {
 	kc := keepEmptyCounts[s.room]
 	keepEmptyMu.RUnlock()
 
-	s.Send(map[string]interface{}{
+	// Send initialization to the NEW connection only (not broadcast)
+	s.sendTo(ws, map[string]interface{}{
 		"event":          "sessionCreated",
 		"sessionId":      s.id,
 		"marked":         s.marked,
@@ -460,26 +417,29 @@ func (s *Session) Reattach(ws *websocket.Conn) {
 		"keepEmptyCount": kc,
 	})
 
-	// Synchronize bots list instantly
+	// Synchronize bots list to the new connection
 	bots := s.GetBotList()
-	s.Send(map[string]interface{}{
+	s.sendTo(ws, map[string]interface{}{
 		"event": "botSync",
 		"bots":  bots,
 	})
 }
 
-// Close tears down the session ONLY if the connection matches the active one.
+// CloseConn removes a WebSocket connection from the session's fan-out set.
+// If no connections remain and the session has no bots, it is destroyed.
+// If bots remain, the session is orphaned (kept alive for reattachment).
 func (s *Session) CloseConn(ws *websocket.Conn) {
 	s.wsMu.Lock()
-	isCurrent := s.ws == ws
+	delete(s.wsSet, ws)
+	remaining := len(s.wsSet)
 	s.wsMu.Unlock()
 
-	if !isCurrent {
-		// This is a defunct connection from a prior page reload — ignore it
+	color.New(color.FgYellow).Printf("[Session %s] Connection closed (%d remaining)\n", s.id, remaining)
+
+	if remaining > 0 {
+		// Other connections still active — session remains fully alive
 		return
 	}
-
-	color.New(color.FgYellow).Printf("[Session %s] Extension disconnected\n", s.id)
 
 	s.mu.Lock()
 	// If ANY bots exist in the map (even connecting, not yet joined),
@@ -512,63 +472,56 @@ func (s *Session) CloseConn(ws *websocket.Conn) {
 	sessionsMu.Unlock()
 }
 
-// NotifyOwnersOfClientChange calculates the total non-owner connected clients
-// and sends an event to all owner sessions so their extensions can show the admin panel.
-func NotifyOwnersOfClientChange() {
-	sessionsMu.RLock()
-	totalClients := 0
-	var ownerSessions []*Session
-	for _, s := range sessions {
-		s.mu.RLock()
-		if s.isOwner {
-			ownerSessions = append(ownerSessions, s)
-		} else if !s.orphaned {
-			totalClients++
-		}
-		s.mu.RUnlock()
-	}
-	sessionsMu.RUnlock()
-
-	for _, owner := range ownerSessions {
-		owner.Send(map[string]interface{}{
-			"event":        "lasherConnected",
-			"totalClients": totalClients,
-		})
-	}
-}
-
-
-// sessionReaper periodically cleans up orphaned sessions that have no alive bots
-// and are beyond their rejoin window. Runs every 60 seconds.
+// sessionReaper periodically cleans up orphaned sessions that have no alive bots.
+// Sessions with autoRejoin enabled are kept alive for up to 7 days — bots may
+// be actively reconnecting in the background even when the extension is away.
 func sessionReaper() {
 	for {
-		time.Sleep(120 * time.Second)
+		time.Sleep(60 * time.Second)
 		sessionsMu.Lock()
 		for id, s := range sessions {
 			s.mu.RLock()
 			isOrph := s.orphaned
 			aliveCount := 0
+			totalBots := len(s.bots)
 			for _, b := range s.bots {
-				if b.IsAlive() || b.joinConfirmed.Load() {
+				if b.IsAlive() && b.joinConfirmed.Load() {
 					aliveCount++
 				}
 			}
 			age := time.Since(s.createdAt)
-			hasAutoRejoin := s.autoRejoin.Load()
+			autoRejoinOn := s.autoRejoin.Load()
+			cfg := s.autoRejoinConfig
 			s.mu.RUnlock()
 
-			// Keep sessions alive much longer:
-			// - With autoRejoin: keep for 7 days (bots self-replenish)
-			// - Without autoRejoin: keep for 30 minutes after last bot dies
-			maxAge := 30 * time.Minute
-			if hasAutoRejoin {
-				maxAge = 7 * 24 * time.Hour // 7 days
+			if !isOrph {
+				continue
 			}
 
-			if isOrph && aliveCount == 0 && age > maxAge {
-				color.New(color.FgHiYellow).Printf("[Session Reaper] Cleaning up orphaned session %s (room=%s) — no alive bots, age=%s\n", id, s.room, age.Round(time.Second))
-				// Save room settings before cleanup
-				SaveRoomSettings(s.room, s)
+			// If autoRejoin is on, keep the session alive for up to 7 days.
+			// Bots may be reconnecting in the background.
+			if autoRejoinOn {
+				if age > 7*24*time.Hour {
+					color.New(color.FgHiYellow).Printf("[Session Reaper] Retiring 7-day old session %s (room=%s)\n", id, s.room)
+					delete(sessions, id)
+					continue
+				}
+				// All bots died but autoRejoin is still on — restart them
+				if aliveCount == 0 && totalBots == 0 && cfg != nil && cfg.Room != "" && cfg.Idioma == "" {
+					color.New(color.FgHiCyan).Printf("[Session Reaper] No bots in autoRejoin session %s (room=%s) — relaunching\n", id, s.room)
+					go func(sess *Session, c *AutoJoinConfig) {
+						if sess.tryBeginRejoin() {
+							defer sess.endRejoin()
+							sess.startRejoinAutoJoin(c)
+						}
+					}(s, cfg)
+				}
+				continue
+			}
+
+			// No autoRejoin: clean up after 5 minutes with no alive bots
+			if aliveCount == 0 && age > 5*time.Minute {
+				color.New(color.FgHiYellow).Printf("[Session Reaper] Cleaning up orphaned session %s (room=%s) — no alive bots\n", id, s.room)
 				delete(sessions, id)
 			}
 		}
@@ -638,6 +591,22 @@ done:
 		"event": "botSync",
 		"bots":  bots,
 	})
+}
+
+// findBotGlobally searches ALL sessions for a bot by numericId.
+// Returns the bot and the session it belongs to.
+func findBotGlobally(numericId int) (*Bot, *Session) {
+	sessionsMu.RLock()
+	defer sessionsMu.RUnlock()
+	for _, sess := range sessions {
+		sess.mu.RLock()
+		bot, ok := sess.bots[numericId]
+		sess.mu.RUnlock()
+		if ok {
+			return bot, sess
+		}
+	}
+	return nil, nil
 }
 
 // HandleMessage processes a command from the extension.
@@ -732,6 +701,18 @@ func (s *Session) HandleMessage(raw []byte) {
 			}
 		}
 		s.mu.Unlock()
+		if !ok {
+			bot, otherSess := findBotGlobally(numId)
+			if bot != nil {
+				otherSess.mu.Lock()
+				delete(otherSess.bots, numId)
+				if numId == otherSess.reporterBotId {
+					otherSess.electReporterLocked()
+				}
+				otherSess.mu.Unlock()
+				ok = true
+			}
+		}
 		if ok {
 			bot.exitedManually.Store(true)
 			bot.Destroy()
@@ -763,6 +744,12 @@ func (s *Session) HandleMessage(raw []byte) {
 			}
 		}
 		s.mu.RUnlock()
+		if !ok {
+			bot, _ = findBotGlobally(numId)
+			if bot != nil {
+				ok = true
+			}
+		}
 		if ok && bot.IsAlive() && bot.garticId.Load() != 0 {
 			gid := int(bot.garticId.Load())
 			if !bot.SendRaw(fmt.Sprintf(`42[13,%d,%s]`, gid, jsonString(text))) {
@@ -785,6 +772,12 @@ func (s *Session) HandleMessage(raw []byte) {
 		s.mu.RLock()
 		bot, ok := s.bots[numId]
 		s.mu.RUnlock()
+		if !ok {
+			bot, _ = findBotGlobally(numId)
+			if bot != nil {
+				ok = true
+			}
+		}
 		if ok && bot.IsAlive() && bot.joinConfirmed.Load() {
 			bot.SendRaw(fmt.Sprintf(`42[13,%d,%s]`, int(bot.garticId.Load()), jsonString(text)))
 		}
@@ -1013,7 +1006,7 @@ func (s *Session) HandleMessage(raw []byte) {
 		}
 		yellow.Printf("[%s] AUTO-REJOIN %v\n", s.id, enabled)
 		s.Send(map[string]interface{}{"event": "autoRejoinStatus", "enabled": enabled})
-		SaveRoomSettings(s.room, s)
+		go PutRoomPersist(s)
 
 	case "autojoin":
 		room := parseRoom(getString(msg, "room", s.room))
@@ -1087,11 +1080,11 @@ func (s *Session) HandleMessage(raw []byte) {
 		keepEmptyCounts[s.room] = count
 		keepEmptyMu.Unlock()
 		s.Send(map[string]interface{}{
-			"event":      "keepEmptyStatus",
-			"keepEmpty":  enabled,
-			"count":      count,
+			"event":     "keepEmptyStatus",
+			"keepEmpty": enabled,
+			"count":     count,
 		})
-		SaveRoomSettings(s.room, s)
+		go PutRoomPersist(s)
 
 	case "rejoin":
 		enabled, _ := msg["enabled"].(bool)
@@ -1102,7 +1095,7 @@ func (s *Session) HandleMessage(raw []byte) {
 			"event":  "rejoinStatus",
 			"rejoin": enabled,
 		})
-		SaveRoomSettings(s.room, s)
+		go PutRoomPersist(s)
 
 	case "autofarm":
 		enabled, _ := msg["enabled"].(bool)
@@ -1110,7 +1103,7 @@ func (s *Session) HandleMessage(raw []byte) {
 		s.autofarm = enabled
 		s.mu.Unlock()
 		yellow.Printf("[%s] AUTOFARM %v\n", s.id, enabled)
-		SaveRoomSettings(s.room, s)
+		go PutRoomPersist(s)
 
 	case "setPrivateMode":
 		enabled, _ := msg["enabled"].(bool)
@@ -1121,7 +1114,7 @@ func (s *Session) HandleMessage(raw []byte) {
 			s.currentDrawerId.Store(0)
 		}
 		yellow.Printf("[%s] PRIVATE MODE %v\n", s.id, enabled)
-		SaveRoomSettings(s.room, s)
+		go PutRoomPersist(s)
 
 	case "answerReveal":
 		enabled, _ := msg["enabled"].(bool)
@@ -1129,7 +1122,7 @@ func (s *Session) HandleMessage(raw []byte) {
 		s.answerReveal = enabled
 		s.mu.Unlock()
 		yellow.Printf("[%s] ANSWER REVEAL %v\n", s.id, enabled)
-		SaveRoomSettings(s.room, s)
+		go PutRoomPersist(s)
 
 	default:
 		if cmd != "" {

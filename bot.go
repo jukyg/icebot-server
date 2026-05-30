@@ -670,7 +670,7 @@ func botMessageLoop(ctx context.Context, s *Session, bot *Bot, botNumId int, roo
 	ws := bot.ws
 	ws.SetReadLimit(4 << 20) // 4MB max message
 	ws.SetPongHandler(func(string) error {
-		ws.SetReadDeadline(time.Now().Add(600 * time.Second))
+		ws.SetReadDeadline(time.Now().Add(180 * time.Second))
 		return nil
 	})
 	defer func() {
@@ -730,17 +730,12 @@ func botMessageLoop(ctx context.Context, s *Session, bot *Bot, botNumId int, roo
 			})
 		}
 
-		// Auto-rejoin logic (persistent bots mode):
-		// When autoRejoin is ON, bots auto-rejoin on disconnect even
-		// when the user is away (session orphaned). This keeps bots
-		// running indefinitely — auto-farming, drawing, etc.
-		// When the user returns, GetOrCreateSession finds the orphaned
-		// session via Reattach — all surviving bots are immediately
-		// synced to the UI.
-		//
-		// Throttled via tryBeginRejoin to prevent storms when multiple
-		// bots disconnect simultaneously — only the first one acquires
-		// the lock, the rest are silently dropped.
+		// Auto-rejoin logic (persistent bots — NEVER DISCONNECT mode):
+		// Only fires for bots that had already confirmed joining (wasJoined).
+		// This preserves the normal manual-join flow: if a bot fails during
+		// the initial handshake it does NOT trigger startRejoinAutoJoin, which
+		// would otherwise conflict with the user's in-progress join attempt.
+		// Throttled via tryBeginRejoin so only one rejoin runs at a time.
 		if wasJoined && autoRejoinOn && !isAutoJoining {
 			if s.tryBeginRejoin() {
 				defer s.endRejoin()
@@ -752,6 +747,15 @@ func botMessageLoop(ctx context.Context, s *Session, bot *Bot, botNumId int, roo
 					if qty <= 0 {
 						qty = 1
 					}
+					// Count remaining joined bots to decide restart vs. top-up
+					joinedRemaining := 0
+					s.mu.RLock()
+					for _, b := range s.bots {
+						if b.joinConfirmed.Load() {
+							joinedRemaining++
+						}
+					}
+					s.mu.RUnlock()
 					if joinedRemaining == 0 {
 						cyan.Printf("[auto-rejoin] Bot died, no observers — starting autojoin (room=%s)\n", cfg.Room)
 						go s.startRejoinAutoJoin(cfg)
@@ -781,7 +785,7 @@ func botMessageLoop(ctx context.Context, s *Session, bot *Bot, botNumId int, roo
 	// 3. Signal to Gartic this bot is active (anti-AFK)
 	// This is the equivalent of wsProxy.js's Worker-backed keepalive.
 	go func() {
-		hbTicker := time.NewTicker(10 * time.Second)
+		hbTicker := time.NewTicker(12 * time.Second)
 		defer hbTicker.Stop()
 		for {
 			select {
@@ -840,7 +844,7 @@ func botMessageLoop(ctx context.Context, s *Session, bot *Bot, botNumId int, roo
 			msg = pendingMsg
 			pendingMsg = ""
 		} else {
-			ws.SetReadDeadline(time.Now().Add(600 * time.Second))
+			ws.SetReadDeadline(time.Now().Add(180 * time.Second))
 			_, raw, err := ws.ReadMessage()
 			if err != nil {
 				return

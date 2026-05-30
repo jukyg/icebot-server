@@ -618,6 +618,19 @@ body.cursor-hover #cursor-ring{width:48px;height:48px;border-color:rgba(29,233,1
   letter-spacing:0.05em;
 }
 .uptime-badge .uptime-val{color:var(--text-2)}
+.admin-panel-btn{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:7px 16px;border-radius:8px;
+  background:linear-gradient(135deg,#f7c059,#ff6b35);
+  color:#0a0a0a;font-weight:800;font-size:0.72rem;
+  letter-spacing:0.07em;text-decoration:none;
+  box-shadow:0 2px 12px rgba(255,107,53,0.3);
+  transition:all 0.2s;
+}
+.admin-panel-btn:hover{
+  transform:translateY(-1px);
+  box-shadow:0 6px 22px rgba(255,107,53,0.5);
+}
 
 /* ============================================================
    MAIN CONTENT
@@ -1447,6 +1460,7 @@ kbd{
     </div>
 
     <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <a class="admin-panel-btn" id="adminPanelBtn" style="display:none" href="#" target="_blank">&#9881; ADMIN</a>
       <div class="uptime-badge">
         UP <span class="uptime-val" id="uptimeDisplay">0s</span>
       </div>
@@ -2232,6 +2246,14 @@ function apiPassword(){
 }
 
 function updateAuthUI(){
+  var btn = document.getElementById('adminPanelBtn');
+  if(!btn) return;
+  if(state.unlocked && state.password){
+    btn.href = '/admin?password=' + encodeURIComponent(state.password);
+    btn.style.display = 'inline-flex';
+  } else {
+    btn.style.display = 'none';
+  }
 }
 
 function fetchStats(){
