@@ -211,15 +211,8 @@ func GetOrCreateSession(ws *websocket.Conn, room string) *Session {
 		privateMode: true,
 		createdAt:   time.Now(),
 	}
-	s.autoRejoin.Store(true)
-	s.autoRejoinConfig = &AutoJoinConfig{
-		Room:     room,
-		Name:     "Bot",
-		Nick:     "Bot",
-		NickMode: "0",
-		Avatar:   "0",
-		Target:   10,
-	}
+	// autoRejoin defaults to false — bots never join without an explicit "join" command
+	s.autoRejoin.Store(false)
 
 	for i := 0; i < connectWorkers; i++ {
 		go s.connectWorker()
@@ -736,6 +729,7 @@ func (s *Session) HandleMessage(raw []byte) {
 			Target: qty, Idioma: idioma,
 		}
 		s.mu.Unlock()
+		s.autoRejoin.Store(true)
 
 		// Try turbo pool first (for private rooms only), then normal
 		turboUsed := 0
@@ -765,6 +759,7 @@ func (s *Session) HandleMessage(raw []byte) {
 			"event": "botSync",
 			"bots":  []map[string]interface{}{},
 		})
+		go PutRoomPersist(s)
 
 	case "exitBot":
 		numId := int(getFloat(msg, "numericId", 0))
