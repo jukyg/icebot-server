@@ -756,6 +756,10 @@ func (s *Session) HandleMessage(raw []byte) {
 			s.autoJoinCancel = nil
 		}
 		s.StopTurbo()
+		s.autoRejoin.Store(false)
+		s.mu.Lock()
+		s.autoRejoinConfig = nil
+		s.mu.Unlock()
 		s.DestroyAllBots()
 		s.Send(map[string]interface{}{
 			"event": "botSync",
@@ -793,6 +797,13 @@ func (s *Session) HandleMessage(raw []byte) {
 			bot.Destroy()
 			yellow.Printf("[%s] EXIT bot %d\n", s.id, numId)
 			s.Send(map[string]interface{}{"event": "botDisconnected", "numericId": numId})
+			// If last bot removed manually, disable autoRejoin so keepBotsAlive/reaper don't restart
+			s.mu.Lock()
+			if len(s.bots) == 0 {
+				s.autoRejoin.Store(false)
+				s.autoRejoinConfig = nil
+			}
+			s.mu.Unlock()
 		}
 
 	case "chat":
