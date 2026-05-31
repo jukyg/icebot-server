@@ -94,16 +94,16 @@ var residentialProxies []ResidentialProxy
 
 // proxySeeds are the known working residential proxies with credentials.
 var proxySeeds = []ResidentialProxy{
-	{IP: "38.154.203.95", Port: "5863", Username: "zmvhoipo", Password: "jf1azmanzauy"},
-	{IP: "198.105.121.200", Port: "6462", Username: "zmvhoipo", Password: "jf1azmanzauy"},
-	{IP: "64.137.96.74", Port: "6641", Username: "zmvhoipo", Password: "jf1azmanzauy"},
-	{IP: "209.127.138.10", Port: "5784", Username: "zmvhoipo", Password: "jf1azmanzauy"},
-	{IP: "38.154.185.97", Port: "6370", Username: "zmvhoipo", Password: "jf1azmanzauy"},
-	{IP: "84.247.60.125", Port: "6095", Username: "zmvhoipo", Password: "jf1azmanzauy"},
-	{IP: "142.111.67.146", Port: "5611", Username: "zmvhoipo", Password: "jf1azmanzauy"},
-	{IP: "191.96.254.138", Port: "6185", Username: "zmvhoipo", Password: "jf1azmanzauy"},
-	{IP: "31.58.9.4", Port: "6077", Username: "zmvhoipo", Password: "jf1azmanzauy"},
-	{IP: "64.137.10.153", Port: "5803", Username: "zmvhoipo", Password: "jf1azmanzauy"},
+	{IP: "38.154.203.95", Port: "5863", Username: "fjdiujcj", Password: "bamvb22jtfi7"},
+	{IP: "198.105.121.200", Port: "6462", Username: "fjdiujcj", Password: "bamvb22jtfi7"},
+	{IP: "64.137.96.74", Port: "6641", Username: "fjdiujcj", Password: "bamvb22jtfi7"},
+	{IP: "209.127.138.10", Port: "5784", Username: "fjdiujcj", Password: "bamvb22jtfi7"},
+	{IP: "38.154.185.97", Port: "6370", Username: "fjdiujcj", Password: "bamvb22jtfi 7"},
+	{IP: "84.247.60.125", Port: "6095", Username: "fjdiujcj", Password: "bamvb22jtfi7"},
+	{IP: "142.111.67.146", Port: "5611", Username: "fjdiujcj", Password: "bamvb22jtfi7"},
+	{IP: "191.96.254.138", Port: "6185", Username: "fjdiujcj", Password: "bamvb22jtfi7"},
+	{IP: "31.58.9.4", Port: "6077", Username: "fjdiujcj", Password: "bamvb22jtfi7"},
+	{IP: "104.239.107.47", Port: "5699", Username: "fjdiujcj", Password: "bamvb22jtfi7"},
 }
 
 func init() {
